@@ -6,7 +6,7 @@ import time
 import json
 
 # ================== تنظیمات ==================
-TELEGRAM_TOKEN = "YOUR_BOT_TOKEN"  # از @BotFather بگیر
+TELEGRAM_TOKEN = "8897901998:AAE0vCgZD5AShjIqKOrjOBtMhngXC562pkA"  # از @BotFather بگیر
 TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"   # از @userinfobot بگیر
 
 # تایم‌فریم‌ها
