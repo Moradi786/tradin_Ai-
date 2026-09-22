@@ -1,0 +1,11 @@
+aiohttp==3.9.1
+aiosqlite==0.19.0
+python-telegram-bot==20.7
+pandas==2.1.4
+numpy==1.26.2
+matplotlib==3.8.2
+scikit-learn==1.3.2
+xgboost==2.0.3
+joblib==1.3.2
+python-dotenv==1.0.0
+google-generativeai==0.3.2
