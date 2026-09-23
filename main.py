@@ -51,7 +51,25 @@ RSI_SHORT_MIN = float(os.getenv("RSI_SHORT_MIN", "35"))
 RSI_SHORT_MAX = float(os.getenv("RSI_SHORT_MAX", "65"))
 
 # Database
-DB_NAME = "signal_bot.db"
+DB_NAME = "signal_bot.
+
+# LiveCoinWatch
+async def fetch_livecoinwatch_data(session, api_key):
+    """دریافت داده از LiveCoinWatch"""
+    try:
+        url = "https://api.livecoinwatch.com/coins/list"
+        headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+        payload = {"currency": "USD", "sort": "volume", "order": "descending", "limit": 100}
+        
+        async with session.post(url, headers=headers, json=payload, timeout=10) as r:
+            if r.status == 200:
+                data = await r.json()
+                return data
+    except Exception as e:
+        LOGGER.error(f"LiveCoinWatch error: {e}")
+    return []
+
+
 
 # ==========================================================
 # 1. Database
