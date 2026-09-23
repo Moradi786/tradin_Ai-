@@ -12,7 +12,6 @@ except ImportError:
     pass
 
 import aiohttp
-import numpy as np
 from datetime import datetime, timedelta, timezone
 
 # ==========================================================
@@ -21,8 +20,8 @@ from datetime import datetime, timedelta, timezone
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 LOGGER = logging.getLogger("SignalBot")
 
-TELEGRAM_BOT_TOKEN = os.getenv("8897901998:AAE0vCgZD5AShjIqKOrjOBtMhngXC562pkA", "")
-TELEGRAM_CHAT_ID = os.getenv("-1003988989632", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT = int(os.getenv("PORT", 8080))
 
 # API URLs
@@ -102,7 +101,7 @@ async def check_cooldown(symbol: str) -> bool:
     )
     if not result:
         return True
-
+    
     last_time = datetime.fromisoformat(result[0][0])
     elapsed = (datetime.now() - last_time).total_seconds() / 60
     return elapsed >= SIGNAL_COOLDOWN_MINUTES
@@ -295,11 +294,11 @@ def analyze_rsi_multi_timeframe(klines_15m, klines_1h, klines_4h):
         else:
             trend = "FLAT"
         return rsi, trend
-
+    
     rsi_15m, trend_15m = get_rsi_trend(klines_15m)
     rsi_1h, trend_1h = get_rsi_trend(klines_1h)
     rsi_4h, trend_4h = get_rsi_trend(klines_4h)
-
+    
     score = 0
     if trend_15m == "RISING":
         score += 1
@@ -313,14 +312,14 @@ def analyze_rsi_multi_timeframe(klines_15m, klines_1h, klines_4h):
         score -= 2
     if trend_4h == "FALLING":
         score -= 3
-
+    
     if score >= 3:
         overall = "BULLISH"
     elif score <= -3:
         overall = "BEARISH"
     else:
         overall = "NEUTRAL"
-
+    
     return {
         "rsi_15m": rsi_15m, "trend_15m": trend_15m,
         "rsi_1h": rsi_1h, "trend_1h": trend_1h,
@@ -337,20 +336,20 @@ async def analyze_pair_trend(session, symbol, timeframe="4h"):
         klines = await fetch_klines(session, symbol, timeframe)
         if not klines or len(klines) < 20:
             return {"trend": "NEUTRAL", "change": 0}
-
+        
         C = [float(k[4]) for k in klines[:-1]]
         current = C[-1]
         sma20 = sum(C[-20:]) / 20
-
+        
         change_24h = (C[-1] / C[-6] - 1) * 100 if len(C) >= 6 else 0
-
+        
         if current > sma20 * 1.01 and change_24h > 1:
             trend = "BULLISH"
         elif current < sma20 * 0.99 and change_24h < -1:
             trend = "BEARISH"
         else:
             trend = "NEUTRAL"
-
+        
         return {"trend": trend, "change": round(change_24h, 2)}
     except:
         return {"trend": "NEUTRAL", "change": 0}
@@ -359,26 +358,26 @@ async def check_dominance_alignment(session, symbol, direction):
     """بررسی هم‌جهتی ۵ عامل برای سیگنال"""
     try:
         base = symbol.replace("USDT", "").replace("BUSD", "")
-
+        
         # 1. BTC
         btc = await analyze_pair_trend(session, "BTCUSDT", "4h")
-
+        
         # 2. BTC.D (تخمینی از رفتار BTC vs TOTAL2)
         # اگر BTC صعودی ولی ضعیف‌تر از TOTAL2 → BTC.D نزولی
         total2 = await analyze_pair_trend(session, "ETHUSDT", "4h")  # تقریبی
-
+        
         # 3. ETH/BTC
         eth_btc = await analyze_pair_trend(session, "ETHBTC", "4h")
-
+        
         # 4. ALT/ETH
         alt_eth = await analyze_pair_trend(session, base + "ETH", "4h")
-
+        
         # 5. ALT/BTC
         alt_btc = await analyze_pair_trend(session, base + "BTC", "4h")
-
+        
         score = 0
         details = []
-
+        
         if direction == "SHORT":
             if btc["trend"] == "BEARISH":
                 score += 1
@@ -411,9 +410,9 @@ async def check_dominance_alignment(session, symbol, direction):
             if alt_btc["trend"] == "BULLISH":
                 score += 1
                 details.append("ALT/BTC:BULLISH")
-
+        
         aligned = score >= DOMINANCE_MIN_SCORE
-
+        
         return {
             "aligned": aligned,
             "score": score,
@@ -435,16 +434,16 @@ def analyze_order_book(bids, asks):
     """تحلیل اردربوک"""
     if not bids or not asks:
         return {"imbalance": 0, "spread_pct": 0, "bid_depth": 0, "ask_depth": 0}
-
+    
     bv10 = sum(float(b[1]) for b in bids[:10])
     av10 = sum(float(a[1]) for a in asks[:10])
     tv10 = bv10 + av10 + 1e-9
     imbalance = (bv10 - av10) / tv10
-
+    
     bb = float(bids[0][0])
     ba = float(asks[0][0])
     spread_pct = ((ba - bb) / bb) * 100 if bb > 0 else 0
-
+    
     return {
         "imbalance": round(imbalance, 4),
         "spread_pct": round(spread_pct, 4),
@@ -459,7 +458,7 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
     """تحلیل سیگنال - فقط Strategy 4: Volume Without Movement"""
     if not klines_15m or len(klines_15m) < 80:
         return None
-
+    
     # داده‌های 15m
     closed = klines_15m[:-1]
     O = [float(k[1]) for k in closed]
@@ -467,14 +466,14 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
     L = [float(k[3]) for k in closed]
     C = [float(k[4]) for k in closed]
     V = [float(k[5]) for k in closed]
-
+    
     cc = C[-1]  # آخرین کلوز
-
+    
     # اندیکاتورها
     rsi = calc_rsi(C)
     atr = calc_atr(H, L, C)
     pdi, mdi, adx = calc_dmi(H, L, C)
-
+    
     # روند 4H و 1H
     if klines_4h and len(klines_4h) >= 50:
         H4 = [float(k[2]) for k in klines_4h[:-1]]
@@ -483,7 +482,7 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
         h4_trend = dow_trend(ph4, pl4)
     else:
         h4_trend = "NEUTRAL"
-
+    
     if klines_1h and len(klines_1h) >= 50:
         H1 = [float(k[2]) for k in klines_1h[:-1]]
         L1 = [float(k[3]) for k in klines_1h[:-1]]
@@ -491,32 +490,32 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
         h1_trend = dow_trend(ph1, pl1)
     else:
         h1_trend = "NEUTRAL"
-
+    
     # حجم
     avg_v20 = sum(V[-21:-1]) / 20.0 if len(V) >= 21 else max(V[-1], 1.0)
     vol_ratio = V[-1] / avg_v20 if avg_v20 > 0 else 1.0
-
+    
     # Strategy 4: Volume Without Movement
     vol_surge = vol_ratio >= S4_MIN_VOLUME_RATIO
     price_movement_5c = abs(cc - C[-5]) / C[-5] * 100 if len(C) >= 5 else 0
     price_movement_10c = abs(cc - C[-10]) / C[-10] * 100 if len(C) >= 10 else 0
     price_stagnant = price_movement_5c < S4_MAX_PRICE_MOVE_5C and price_movement_10c < S4_MAX_PRICE_MOVE_10C
-
+    
     s4_long = (vol_surge and price_stagnant and cc >= C[-10] * 0.98 and 
                rsi > RSI_LONG_MIN and rsi < RSI_LONG_MAX and pdi >= mdi and adx > S4_MIN_ADX)
     s4_short = (vol_surge and price_stagnant and cc <= C[-10] * 1.02 and 
                 rsi < RSI_SHORT_MAX and rsi > RSI_SHORT_MIN and mdi >= pdi and adx > S4_MIN_ADX)
-
+    
     # انتخاب جهت
     direction = None
     if s4_long and h4_trend == "BULLISH" and h1_trend == "BULLISH":
         direction = "LONG"
     elif s4_short and h4_trend == "BEARISH" and h1_trend == "BEARISH":
         direction = "SHORT"
-
+    
     if not direction:
         return None
-
+    
     # محاسبه SL/TP
     if direction == "LONG":
         sl = cc - 1.5 * atr
@@ -530,12 +529,12 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
         tp1 = cc - 2 * risk
         tp2 = cc - 3 * risk
         tp3 = cc - 4 * risk
-
+    
     sl_pct = (risk / cc) * 100 if cc > 0 else 999
-
+    
     if risk <= 0 or sl_pct > MAX_SL_PERCENT:
         return None
-
+    
     return {
         "direction": direction,
         "strategy": "Volume Without Movement",
@@ -562,13 +561,13 @@ class TelegramNotifier:
         self.token = token
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{token}"
-
+    
     async def send_message(self, session, text):
         """ارسال پیام به تلگرام"""
         if not self.token or not self.chat_id:
             LOGGER.warning("Telegram not configured")
             return
-
+        
         try:
             url = f"{self.base_url}/sendMessage"
             payload = {
@@ -592,17 +591,17 @@ class SignalBot:
         self.notifier = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
         self.symbols_cache = []
         self.cache_time = 0
-
+    
     async def get_top_symbols(self, session):
         """دریافت لیست کوین‌های برتر بر اساس حجم"""
         now = time.time()
         if now - self.cache_time < 300 and self.symbols_cache:  # کش ۵ دقیقه
             return self.symbols_cache
-
+        
         tickers = await fetch_24h_tickers(session)
         if not tickers:
             return []
-
+        
         # فیلتر و مرتب‌سازی بر اساس حجم
         valid_tickers = []
         for t in tickers:
@@ -611,50 +610,50 @@ class SignalBot:
                 continue
             if "UP" in symbol or "DOWN" in symbol or "BULL" in symbol or "BEAR" in symbol:
                 continue
-
+            
             quote_volume = float(t.get("quoteVolume", 0))
             if quote_volume >= MIN_BTC_VOLUME * 1000000:  # تبدیل به میلیون
                 valid_tickers.append({
                     "symbol": symbol,
                     "volume": quote_volume
                 })
-
+        
         # مرتب‌سازی بر اساس حجم
         valid_tickers.sort(key=lambda x: x["volume"], reverse=True)
-
+        
         # فقط ۱۰۰ تای برتر
         self.symbols_cache = [t["symbol"] for t in valid_tickers[:100]]
         self.cache_time = now
-
+        
         LOGGER.info(f"Loaded {len(self.symbols_cache)} symbols")
         return self.symbols_cache
-
+    
     async def process_symbol(self, session, symbol):
         """پردازش یک کوین"""
         try:
             # چک کردن کول‌داون
             if not await check_cooldown(symbol):
                 return
-
+            
             # دریافت داده‌ها
             klines_15m = await fetch_klines(session, symbol, "15m")
             if not klines_15m:
                 return
-
+            
             klines_1h = await fetch_klines(session, symbol, "1h")
             klines_4h = await fetch_klines(session, symbol, "4h")
-
+            
             # تحلیل سیگنال
             signal = analyze_signal(klines_15m, klines_1h, klines_4h, symbol)
             if not signal:
                 return
-
+            
             # بررسی Dominance
             dom_check = await check_dominance_alignment(session, symbol, signal["direction"])
             if not dom_check["aligned"]:
                 LOGGER.info(f"Dominance failed for {symbol}: {dom_check['score']}/5")
                 return
-
+            
             # RSI Multi-TF
             rsi_mtf = analyze_rsi_multi_timeframe(klines_15m, klines_1h, klines_4h)
             if signal["direction"] == "LONG" and rsi_mtf["overall"] == "BEARISH":
@@ -663,11 +662,11 @@ class SignalBot:
             if signal["direction"] == "SHORT" and rsi_mtf["overall"] == "BULLISH":
                 LOGGER.info(f"RSI MTF rejected SHORT {symbol}")
                 return
-
+            
             # Order Book
             bids, asks = await fetch_order_book(session, symbol)
             ob_data = analyze_order_book(bids, asks)
-
+            
             # بررسی فشار اردربوک
             if signal["direction"] == "LONG" and ob_data["imbalance"] < -0.2:
                 LOGGER.info(f"OB rejected LONG {symbol}: imbalance {ob_data['imbalance']}")
@@ -675,11 +674,11 @@ class SignalBot:
             if signal["direction"] == "SHORT" and ob_data["imbalance"] > 0.2:
                 LOGGER.info(f"OB rejected SHORT {symbol}: imbalance {ob_data['imbalance']}")
                 return
-
+            
             # ساخت پیام
             alert_id = f"{symbol}_{int(time.time())}"
             await self.send_signal(session, symbol, signal, dom_check, rsi_mtf, ob_data, alert_id)
-
+            
             # ذخیره و کول‌داون
             await save_signal(
                 alert_id, symbol, "15m", signal["direction"], signal["strategy"],
@@ -687,14 +686,14 @@ class SignalBot:
                 signal["sl_percent"], signal["rsi"], signal["adx"], dom_check["score"]
             )
             await update_cooldown(symbol)
-
+            
         except Exception as e:
             LOGGER.error(f"Process symbol error for {symbol}: {e}")
-
+    
     async def send_signal(self, session, symbol, signal, dom_check, rsi_mtf, ob_data, alert_id):
         """ارسال سیگنال"""
         direction_emoji = "🟢" if signal["direction"] == "LONG" else "🔴"
-
+        
         # دلایل سیگنال
         reasons = []
         reasons.append(f"✅ Strategy: {signal['strategy']}")
@@ -706,7 +705,7 @@ class SignalBot:
         reasons.append(f"   └ 15m:{rsi_mtf['rsi_15m']} 1h:{rsi_mtf['rsi_1h']} 4h:{rsi_mtf['rsi_4h']}")
         reasons.append(f"✅ MTF: 4H={signal['h4_trend']} 1H={signal['h1_trend']}")
         reasons.append(f"✅ Order Book: Imbalance={ob_data['imbalance']}")
-
+        
         msg = f"""🚨 *سیگنال جدید* 🚨
 
 🪙 *{symbol}* | {signal['direction']} {direction_emoji} | 15m
@@ -718,27 +717,27 @@ class SignalBot:
 {chr(10).join(reasons)}
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
-
+        
         await self.notifier.send_message(session, msg)
-
+    
     async def run(self):
         """اجرای اصلی ربات"""
         LOGGER.info("Starting Signal Bot...")
         await init_database()
-
+        
         async with aiohttp.ClientSession() as session:
             while True:
                 try:
                     symbols = await self.get_top_symbols(session)
                     LOGGER.info(f"Scanning {len(symbols)} symbols...")
-
+                    
                     for symbol in symbols:
                         await self.process_symbol(session, symbol)
                         await asyncio.sleep(0.5)  # کمی صبر بین کوین‌ها
-
+                    
                     LOGGER.info(f"Scan complete. Waiting {CHECK_INTERVAL_SECONDS}s...")
                     await asyncio.sleep(CHECK_INTERVAL_SECONDS)
-
+                    
                 except Exception as e:
                     LOGGER.error(f"Main loop error: {e}")
                     await asyncio.sleep(60)
