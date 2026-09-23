@@ -31,7 +31,7 @@ BINANCE_FUTURES_TICKER_URL = os.getenv("BINANCE_FUTURES_TICKER_URL", "https://fa
 
 # Settings
 CHECK_INTERVAL_SECONDS = max(5, int(os.getenv("CHECK_INTERVAL_SECONDS", "5")))
-MIN_BTC_VOLUME = float(os.getenv("MIN_BTC_VOLUME", "250.0"))
+MIN_BTC_VOLUME = float(os.getenv("MIN_BTC_VOLUME", "50.0"))
 MAX_SL_PERCENT = float(os.getenv("MAX_SL_PERCENT", "2.0"))
 SIGNAL_COOLDOWN_MINUTES = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "360"))
 
