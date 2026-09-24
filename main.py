@@ -30,19 +30,19 @@ BINANCE_FUTURES_DEPTH_URL = os.getenv("BINANCE_FUTURES_DEPTH_URL", "https://fapi
 BINANCE_FUTURES_TICKER_URL = os.getenv("BINANCE_FUTURES_TICKER_URL", "https://fapi.binance.com/fapi/v1/ticker/24hr")
 
 # Settings
-CHECK_INTERVAL_SECONDS = max(5, int(os.getenv("CHECK_INTERVAL_SECONDS", "5")))
-MIN_BTC_VOLUME = float(os.getenv("MIN_BTC_VOLUME", "50.0"))
+CHECK_INTERVAL_SECONDS = max(5, int(os.getenv("CHECK_INTERVAL_SECONDS", "10")))
+MIN_BTC_VOLUME = float(os.getenv("MIN_BTC_VOLUME", "10"))
 MAX_SL_PERCENT = float(os.getenv("MAX_SL_PERCENT", "2.0"))
-SIGNAL_COOLDOWN_MINUTES = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "360"))
+SIGNAL_COOLDOWN_MINUTES = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30"))
 
 # Strategy 4: Volume Without Movement
-S4_MIN_VOLUME_RATIO = float(os.getenv("S4_MIN_VOLUME_RATIO", "2.0"))
+S4_MIN_VOLUME_RATIO = float(os.getenv("S4_MIN_VOLUME_RATIO", "1.2"))
 S4_MAX_PRICE_MOVE_5C = float(os.getenv("S4_MAX_PRICE_MOVE_5C", "2.0"))
 S4_MAX_PRICE_MOVE_10C = float(os.getenv("S4_MAX_PRICE_MOVE_10C", "3.0"))
 S4_MIN_ADX = float(os.getenv("S4_MIN_ADX", "15"))
 
 # Dominance Filter
-DOMINANCE_MIN_SCORE = int(os.getenv("DOMINANCE_MIN_SCORE", "4"))
+DOMINANCE_MIN_SCORE = int(os.getenv("DOMINANCE_MIN_SCORE", "2"))
 
 # RSI Thresholds
 RSI_LONG_MIN = float(os.getenv("RSI_LONG_MIN", "35"))
@@ -51,25 +51,7 @@ RSI_SHORT_MIN = float(os.getenv("RSI_SHORT_MIN", "35"))
 RSI_SHORT_MAX = float(os.getenv("RSI_SHORT_MAX", "65"))
 
 # Database
-DB_NAME = "signal_bot.
-
-# LiveCoinWatch
-async def fetch_livecoinwatch_data(session, api_key):
-    """دریافت داده از LiveCoinWatch"""
-    try:
-        url = "https://api.livecoinwatch.com/coins/list"
-        headers = {"x-api-key": api_key, "Content-Type": "application/json"}
-        payload = {"currency": "USD", "sort": "volume", "order": "descending", "limit": 100}
-        
-        async with session.post(url, headers=headers, json=payload, timeout=10) as r:
-            if r.status == 200:
-                data = await r.json()
-                return data
-    except Exception as e:
-        LOGGER.error(f"LiveCoinWatch error: {e}")
-    return []
-
-
+DB_NAME = "signal_bot.db"
 
 # ==========================================================
 # 1. Database
@@ -111,7 +93,6 @@ async def init_database():
     LOGGER.info("Database initialized.")
 
 async def check_cooldown(symbol: str) -> bool:
-    """Check if symbol is in cooldown period"""
     result = await asyncio.to_thread(
         db_execute,
         "SELECT last_signal_time FROM cooldown WHERE symbol = ?",
@@ -125,7 +106,6 @@ async def check_cooldown(symbol: str) -> bool:
     return elapsed >= SIGNAL_COOLDOWN_MINUTES
 
 async def update_cooldown(symbol: str):
-    """Update last signal time for symbol"""
     await asyncio.to_thread(
         db_execute,
         "INSERT OR REPLACE INTO cooldown (symbol, last_signal_time) VALUES (?, ?)",
@@ -133,7 +113,6 @@ async def update_cooldown(symbol: str):
     )
 
 async def save_signal(alert_id, symbol, interval, direction, strategy, entry, sl, tp1, tp2, tp3, sl_pct, rsi, adx, dom_score):
-    """Save signal to database"""
     await asyncio.to_thread(
         db_execute,
         """INSERT OR IGNORE INTO signal_history 
@@ -172,7 +151,6 @@ binance_limiter = RateLimiter(rate=20, per=1)
 # 3. Fetch Klines
 # ==========================================================
 async def fetch_klines(session, symbol, interval):
-    """Fetch klines from Binance Futures"""
     try:
         await binance_limiter.acquire()
         url = f"{BINANCE_FUTURES_KLINES_URL}?symbol={symbol}&interval={interval}&limit=200"
@@ -186,7 +164,6 @@ async def fetch_klines(session, symbol, interval):
     return None
 
 async def fetch_order_book(session, symbol, limit=20):
-    """Fetch order book from Binance Futures"""
     try:
         await binance_limiter.acquire()
         url = f"{BINANCE_FUTURES_DEPTH_URL}?symbol={symbol}&limit={limit}"
@@ -202,7 +179,6 @@ async def fetch_order_book(session, symbol, limit=20):
     return [], []
 
 async def fetch_24h_tickers(session):
-    """Fetch 24h ticker data for all symbols"""
     try:
         await binance_limiter.acquire()
         async with session.get(BINANCE_FUTURES_TICKER_URL, timeout=aiohttp.ClientTimeout(total=15)) as r:
@@ -298,7 +274,6 @@ def dow_trend(ph, pl):
 # 5. RSI Multi-Timeframe
 # ==========================================================
 def analyze_rsi_multi_timeframe(klines_15m, klines_1h, klines_4h):
-    """RSI را در 3 تایم‌فریم محاسبه کرده و جهت را تعیین می‌کند"""
     def get_rsi_trend(klines):
         if not klines or len(klines) < 20:
             return 50, "NEUTRAL"
@@ -349,7 +324,6 @@ def analyze_rsi_multi_timeframe(klines_15m, klines_1h, klines_4h):
 # 6. Dominance Analysis
 # ==========================================================
 async def analyze_pair_trend(session, symbol, timeframe="4h"):
-    """تحلیل روند یک جفت ارز"""
     try:
         klines = await fetch_klines(session, symbol, timeframe)
         if not klines or len(klines) < 20:
@@ -373,24 +347,13 @@ async def analyze_pair_trend(session, symbol, timeframe="4h"):
         return {"trend": "NEUTRAL", "change": 0}
 
 async def check_dominance_alignment(session, symbol, direction):
-    """بررسی هم‌جهتی ۵ عامل برای سیگنال"""
     try:
         base = symbol.replace("USDT", "").replace("BUSD", "")
         
-        # 1. BTC
         btc = await analyze_pair_trend(session, "BTCUSDT", "4h")
-        
-        # 2. BTC.D (تخمینی از رفتار BTC vs TOTAL2)
-        # اگر BTC صعودی ولی ضعیف‌تر از TOTAL2 → BTC.D نزولی
-        total2 = await analyze_pair_trend(session, "ETHUSDT", "4h")  # تقریبی
-        
-        # 3. ETH/BTC
+        total2 = await analyze_pair_trend(session, "ETHUSDT", "4h")
         eth_btc = await analyze_pair_trend(session, "ETHBTC", "4h")
-        
-        # 4. ALT/ETH
         alt_eth = await analyze_pair_trend(session, base + "ETH", "4h")
-        
-        # 5. ALT/BTC
         alt_btc = await analyze_pair_trend(session, base + "BTC", "4h")
         
         score = 0
@@ -412,7 +375,7 @@ async def check_dominance_alignment(session, symbol, direction):
             if alt_btc["trend"] == "BEARISH":
                 score += 1
                 details.append("ALT/BTC:BEARISH")
-        else:  # LONG
+        else:
             if btc["trend"] == "BULLISH":
                 score += 1
                 details.append("BTC:BULLISH")
@@ -449,7 +412,6 @@ async def check_dominance_alignment(session, symbol, direction):
 # 7. Order Book Analysis
 # ==========================================================
 def analyze_order_book(bids, asks):
-    """تحلیل اردربوک"""
     if not bids or not asks:
         return {"imbalance": 0, "spread_pct": 0, "bid_depth": 0, "ask_depth": 0}
     
@@ -470,14 +432,12 @@ def analyze_order_book(bids, asks):
     }
 
 # ==========================================================
-# 8. Signal Analysis (Strategy 4 Only)
+# 8. Signal Analysis
 # ==========================================================
 def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
-    """تحلیل سیگنال - فقط Strategy 4: Volume Without Movement"""
     if not klines_15m or len(klines_15m) < 80:
         return None
     
-    # داده‌های 15m
     closed = klines_15m[:-1]
     O = [float(k[1]) for k in closed]
     H = [float(k[2]) for k in closed]
@@ -485,14 +445,12 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
     C = [float(k[4]) for k in closed]
     V = [float(k[5]) for k in closed]
     
-    cc = C[-1]  # آخرین کلوز
+    cc = C[-1]
     
-    # اندیکاتورها
     rsi = calc_rsi(C)
     atr = calc_atr(H, L, C)
     pdi, mdi, adx = calc_dmi(H, L, C)
     
-    # روند 4H و 1H
     if klines_4h and len(klines_4h) >= 50:
         H4 = [float(k[2]) for k in klines_4h[:-1]]
         L4 = [float(k[3]) for k in klines_4h[:-1]]
@@ -509,11 +467,9 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
     else:
         h1_trend = "NEUTRAL"
     
-    # حجم
     avg_v20 = sum(V[-21:-1]) / 20.0 if len(V) >= 21 else max(V[-1], 1.0)
     vol_ratio = V[-1] / avg_v20 if avg_v20 > 0 else 1.0
     
-    # Strategy 4: Volume Without Movement
     vol_surge = vol_ratio >= S4_MIN_VOLUME_RATIO
     price_movement_5c = abs(cc - C[-5]) / C[-5] * 100 if len(C) >= 5 else 0
     price_movement_10c = abs(cc - C[-10]) / C[-10] * 100 if len(C) >= 10 else 0
@@ -524,7 +480,6 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
     s4_short = (vol_surge and price_stagnant and cc <= C[-10] * 1.02 and 
                 rsi < RSI_SHORT_MAX and rsi > RSI_SHORT_MIN and mdi >= pdi and adx > S4_MIN_ADX)
     
-    # انتخاب جهت
     direction = None
     if s4_long and h4_trend == "BULLISH" and h1_trend == "BULLISH":
         direction = "LONG"
@@ -534,7 +489,6 @@ def analyze_signal(klines_15m, klines_1h, klines_4h, symbol):
     if not direction:
         return None
     
-    # محاسبه SL/TP
     if direction == "LONG":
         sl = cc - 1.5 * atr
         risk = cc - sl
@@ -581,7 +535,6 @@ class TelegramNotifier:
         self.base_url = f"https://api.telegram.org/bot{token}"
     
     async def send_message(self, session, text):
-        """ارسال پیام به تلگرام"""
         if not self.token or not self.chat_id:
             LOGGER.warning("Telegram not configured")
             return
@@ -611,16 +564,14 @@ class SignalBot:
         self.cache_time = 0
     
     async def get_top_symbols(self, session):
-        """دریافت لیست کوین‌های برتر بر اساس حجم"""
         now = time.time()
-        if now - self.cache_time < 300 and self.symbols_cache:  # کش ۵ دقیقه
+        if now - self.cache_time < 300 and self.symbols_cache:
             return self.symbols_cache
         
         tickers = await fetch_24h_tickers(session)
         if not tickers:
             return []
         
-        # فیلتر و مرتب‌سازی بر اساس حجم
         valid_tickers = []
         for t in tickers:
             symbol = t.get("symbol", "")
@@ -630,16 +581,14 @@ class SignalBot:
                 continue
             
             quote_volume = float(t.get("quoteVolume", 0))
-            if quote_volume >= MIN_BTC_VOLUME * 1000000:  # تبدیل به میلیون
+            if quote_volume >= MIN_BTC_VOLUME * 1000000:
                 valid_tickers.append({
                     "symbol": symbol,
                     "volume": quote_volume
                 })
         
-        # مرتب‌سازی بر اساس حجم
         valid_tickers.sort(key=lambda x: x["volume"], reverse=True)
         
-        # فقط ۱۰۰ تای برتر
         self.symbols_cache = [t["symbol"] for t in valid_tickers[:100]]
         self.cache_time = now
         
@@ -647,13 +596,10 @@ class SignalBot:
         return self.symbols_cache
     
     async def process_symbol(self, session, symbol):
-        """پردازش یک کوین"""
         try:
-            # چک کردن کول‌داون
             if not await check_cooldown(symbol):
                 return
             
-            # دریافت داده‌ها
             klines_15m = await fetch_klines(session, symbol, "15m")
             if not klines_15m:
                 return
@@ -661,18 +607,15 @@ class SignalBot:
             klines_1h = await fetch_klines(session, symbol, "1h")
             klines_4h = await fetch_klines(session, symbol, "4h")
             
-            # تحلیل سیگنال
             signal = analyze_signal(klines_15m, klines_1h, klines_4h, symbol)
             if not signal:
                 return
             
-            # بررسی Dominance
             dom_check = await check_dominance_alignment(session, symbol, signal["direction"])
             if not dom_check["aligned"]:
                 LOGGER.info(f"Dominance failed for {symbol}: {dom_check['score']}/5")
                 return
             
-            # RSI Multi-TF
             rsi_mtf = analyze_rsi_multi_timeframe(klines_15m, klines_1h, klines_4h)
             if signal["direction"] == "LONG" and rsi_mtf["overall"] == "BEARISH":
                 LOGGER.info(f"RSI MTF rejected LONG {symbol}")
@@ -681,11 +624,9 @@ class SignalBot:
                 LOGGER.info(f"RSI MTF rejected SHORT {symbol}")
                 return
             
-            # Order Book
             bids, asks = await fetch_order_book(session, symbol)
             ob_data = analyze_order_book(bids, asks)
             
-            # بررسی فشار اردربوک
             if signal["direction"] == "LONG" and ob_data["imbalance"] < -0.2:
                 LOGGER.info(f"OB rejected LONG {symbol}: imbalance {ob_data['imbalance']}")
                 return
@@ -693,11 +634,9 @@ class SignalBot:
                 LOGGER.info(f"OB rejected SHORT {symbol}: imbalance {ob_data['imbalance']}")
                 return
             
-            # ساخت پیام
             alert_id = f"{symbol}_{int(time.time())}"
             await self.send_signal(session, symbol, signal, dom_check, rsi_mtf, ob_data, alert_id)
             
-            # ذخیره و کول‌داون
             await save_signal(
                 alert_id, symbol, "15m", signal["direction"], signal["strategy"],
                 signal["entry_price"], signal["stop_loss"], signal["tp1"], signal["tp2"], signal["tp3"],
@@ -709,10 +648,8 @@ class SignalBot:
             LOGGER.error(f"Process symbol error for {symbol}: {e}")
     
     async def send_signal(self, session, symbol, signal, dom_check, rsi_mtf, ob_data, alert_id):
-        """ارسال سیگنال"""
         direction_emoji = "🟢" if signal["direction"] == "LONG" else "🔴"
         
-        # دلایل سیگنال
         reasons = []
         reasons.append(f"✅ Strategy: {signal['strategy']}")
         reasons.append(f"   └ حجم {signal['vol_ratio']}x ولی قیمت فقط {signal['price_movement_5c']}% حرکت")
@@ -739,7 +676,6 @@ class SignalBot:
         await self.notifier.send_message(session, msg)
     
     async def run(self):
-        """اجرای اصلی ربات"""
         LOGGER.info("Starting Signal Bot...")
         await init_database()
         
@@ -751,7 +687,7 @@ class SignalBot:
                     
                     for symbol in symbols:
                         await self.process_symbol(session, symbol)
-                        await asyncio.sleep(0.5)  # کمی صبر بین کوین‌ها
+                        await asyncio.sleep(0.5)
                     
                     LOGGER.info(f"Scan complete. Waiting {CHECK_INTERVAL_SECONDS}s...")
                     await asyncio.sleep(CHECK_INTERVAL_SECONDS)
