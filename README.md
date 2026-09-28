@@ -1,1 +1,1 @@
-# tradin_Ai-
+# tradin_pump_bot
