@@ -272,10 +272,11 @@ def fmt_big(n: float) -> str:
     return f"{n:,.1f}T"
 
 
-def price_line(volume: Optional[dict]) -> str:
-    if not volume or not volume.get("price"):
-        return ""
-    return f" 💵 <code>{volume['price']:,.8g}</code>"
+def coin_line(symbol: str, volume: Optional[dict]) -> str:
+    line = f"🪙 <b>#{symbol}</b>"
+    if volume and volume.get("price"):
+        line += f" ┆ 💵 <code>{volume['price']:,.8g}</code>"
+    return line
 
 
 def market_text(market: dict, direction: str) -> str:
@@ -290,7 +291,7 @@ def market_text(market: dict, direction: str) -> str:
         f"{check(details[k])}{k}" for k in
         ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL2", "TOTAL3")
     )
-    return f"{row}\n🎯 هم‌راستایی: <b>{count}/5</b>"
+    return f"{row} · <b>{count}/5</b>"
 
 
 def flow_text(flow: Optional[dict]) -> str:
@@ -311,10 +312,7 @@ def flow_text(flow: Optional[dict]) -> str:
     total = inflow + outflow
     share = inflow / total * 100 if total else 0
 
-    return (
-        f"{direction} ┆ خالص {fmt_big(netflow)}\n"
-        f"سهم خرید: <b>{share:.1f}%</b>"
-    )
+    return f"{direction} {fmt_big(netflow)} · خرید <b>{share:.1f}%</b>"
 
 
 def oi_text(oi: Optional[dict]) -> str:
@@ -329,10 +327,7 @@ def oi_text(oi: Optional[dict]) -> str:
     else:
         arrow, note = "⚪", "بدون تغییر"
 
-    return (
-        f"{arrow} <b>{change:+.2f}%</b> ({oi['candles']}×{oi['period']})"
-        f" — {note}"
-    )
+    return f"{arrow} <b>{change:+.2f}%</b> · {note}"
 
 
 def fg_text(fg: Optional[dict]) -> str:
@@ -351,7 +346,7 @@ def fg_text(fg: Optional[dict]) -> str:
     else:
         emoji = "🤑"
 
-    return f"{emoji} <b>{value}</b> — {fg['label']}"
+    return f"{emoji} <b>{value}</b> {fg['label']}"
 
 
 def btc_text(btc: dict) -> str:
@@ -371,8 +366,8 @@ def lwc_text(lwc: Optional[dict]) -> str:
     if not lwc:
         return "⚪ در دسترس نیست"
     return (
-        f"Vol ${fmt_big(lwc['volume'])} ┆ V/MC {lwc['vol_to_mcap']:.2f}\n"
-        f"1H {lwc['change_1h']:+.2f}% ┆ 24H {lwc['change_24h']:+.2f}%"
+        f"${fmt_big(lwc['volume'])} · V/MC {lwc['vol_to_mcap']:.2f}"
+        f" · 24H {lwc['change_24h']:+.2f}%"
     )
 
 
@@ -381,21 +376,19 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
     emoji = "🟢" if direction == "LONG" else "🔴"
 
     return f"""
-<b>{emoji} {direction} SIGNAL {emoji}</b>
-🪙 <b>#{symbol}</b>{price_line(volume)}
+<b>{emoji} {direction} SIGNAL</b>
+{coin_line(symbol, volume)}
 {SEP}
-📊 <b>RSI</b> ┆ 15m <b>{rsi_data['15m']:.1f}</b> ┆ 1H <b>{rsi_data['1h']:.1f}</b> ┆ 4H <b>{rsi_data['4h']:.1f}</b>
-📈 <b>VOLUME</b> ┆ <b>{volume['volume_ratio']:.2f}x</b> ┆ {volume['price_move']:+.2f}% ┆ خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
-📦 <b>OI</b> ┆ {oi_text(oi)}
-💰 <b>FLOW</b> ┆ {flow_text(flow)}
-₿ <b>BTC PAIR</b> ┆ {btc_text(btc)}
-🌍 <b>DOMINANCE</b>
-{market_text(market, direction)}
-🌐 <b>LWC</b> ┆ {lwc_text(lwc)}
-😨 <b>SENTIMENT</b> ┆ {fg_text(fg)}
+📊 RSI ┆ 15m <b>{rsi_data['15m']:.1f}</b> · 1H <b>{rsi_data['1h']:.1f}</b> · 4H <b>{rsi_data['4h']:.1f}</b>
+📈 VOL ┆ <b>{volume['volume_ratio']:.2f}x</b> · {volume['price_move']:+.2f}% · خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
+📦 OI ┆ {oi_text(oi)}
+💰 FLOW ┆ {flow_text(flow)}
+₿ BTC ┆ {btc_text(btc)}
+🌍 DOM ┆ {market_text(market, direction)}
+🌐 LWC ┆ {lwc_text(lwc)}
+😨 F&G ┆ {fg_text(fg)}
 {SEP}
-🤖 <b>AI ANALYSIS</b>
-{ai}
+🤖 {ai}
 {SEP}
 {FOOTER}
 """
@@ -404,18 +397,17 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 def early_message(symbol, volume, lwc, flow, oi=None, fg=None) -> str:
     lwc = lwc or {}
     return f"""
-<b>🟡 EARLY WATCH 🟡</b>
-🪙 <b>#{symbol}</b>{price_line(volume)}
-حجم و پول وارد شده، اما قیمت هنوز حرکت نکرده.
+<b>🟡 EARLY WATCH</b>
+{coin_line(symbol, volume)}
+حجم و پول وارد شده؛ قیمت هنوز حرکت نکرده.
 {SEP}
-📈 <b>VOLUME</b> ┆ <b>{volume['volume_ratio']:.2f}x</b> ┆ {volume['price_move']:+.2f}% ┆ خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
-📦 <b>OI</b> ┆ {oi_text(oi)}
-💰 <b>FLOW</b> ┆ {flow_text(flow)}
-🌐 <b>LWC</b> ┆ {lwc_text(lwc)}
-😨 <b>SENTIMENT</b> ┆ {fg_text(fg)}
+📈 VOL ┆ <b>{volume['volume_ratio']:.2f}x</b> · {volume['price_move']:+.2f}% · خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
+📦 OI ┆ {oi_text(oi)}
+💰 FLOW ┆ {flow_text(flow)}
+🌐 LWC ┆ {lwc_text(lwc)}
+😨 F&G ┆ {fg_text(fg)}
 {SEP}
-🟡 هنوز سیگنال نهایی LONG/SHORT نیست.
-{FOOTER}
+🟡 هنوز سیگنال نهایی نیست. {FOOTER}
 """
 
 

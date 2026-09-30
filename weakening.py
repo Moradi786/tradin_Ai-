@@ -116,19 +116,18 @@ def weakening_message(result: dict, symbol: str,
 
     if result["direction"] == "UP":
         title = "⏳ حرکت صعودی در حال تضعیف است"
-        hint = "اگر LONG داری ← <b>سود را بگیر</b> ┆ نداری ← <b>وارد نشو</b>"
+        hint = "LONG داری ← <b>سود را بگیر</b> · نداری ← <b>وارد نشو</b>"
     else:
         title = "⏳ حرکت نزولی در حال تضعیف است"
-        hint = "اگر SHORT داری ← <b>سود را بگیر</b> ┆ نداری ← <b>وارد نشو</b>"
+        hint = "SHORT داری ← <b>سود را بگیر</b> · نداری ← <b>وارد نشو</b>"
 
     return f"""
-<b>⚪ WEAKENING ⚪</b>
-🪙 <b>#{symbol}</b>
-{title}
+<b>⚪ WEAKENING</b>
+🪙 <b>#{symbol}</b> ┆ {title}
 {SEP}
-📉 <b>RSI 15m</b> ┆ قبلی {rsi_data['previous']:.1f} → فعلی <b>{rsi_data['current']:.1f}</b> ({rsi_data['current'] - rsi_data['previous']:+.1f})
-📦 <b>OI</b> ┆ {oi_text_fn(oi)}
-💰 <b>FLOW</b> ┆ {flow_text_fn(flow)}
+📉 RSI ┆ {rsi_data['previous']:.1f} → <b>{rsi_data['current']:.1f}</b> ({rsi_data['current'] - rsi_data['previous']:+.1f})
+📦 OI ┆ {oi_text_fn(oi)}
+💰 FLOW ┆ {flow_text_fn(flow)}
 {SEP}
 💡 {hint}
 {FOOTER}
