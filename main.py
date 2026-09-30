@@ -23,6 +23,7 @@ import uvicorn
 from fastapi import FastAPI
 
 import core
+import weakening
 from core import *  # noqa: F401,F403  (پیکربندی، دیتا، منطق سیگنال)
 
 # مرجع به تسک اسکنر تا از garbage collection جلوگیری شود.
@@ -510,7 +511,7 @@ scan_semaphore = asyncio.Semaphore(SCAN_CONCURRENCY)
 
 async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                       market: dict, fg: Optional[dict]) -> None:
-    """تحلیل یک نماد: early watch و سیگنال نهایی."""
+    """تحلیل یک نماد: early watch، سیگنال نهایی و weakening."""
     async with scan_semaphore:
         try:
             volume = await volume_analysis(symbol)
@@ -536,6 +537,23 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                         )
                     )
                     log.info("EARLY WATCH: %s", symbol)
+
+            # ==========================
+            # WEAKENING (سیگنال سوم)
+            # ==========================
+            # مستقل از آستانهٔ حجم چک می‌شود؛ تضعیف حرکت
+            # معمولاً با خشک شدن حجم همراه است.
+            weak = await weakening.detect_weakening(symbol, flow_coin, oi)
+            if weak:
+                key = f"WEAK:{weak['direction']}:{symbol}"
+                if can_send(key):
+                    await telegram(
+                        weakening.weakening_message(
+                            weak, symbol, flow_coin, oi,
+                            flow_text, oi_text,
+                        )
+                    )
+                    log.info("WEAKENING: %s %s", weak["direction"], symbol)
 
             # ==========================
             # FINAL SIGNAL
@@ -734,6 +752,8 @@ async def startup_diagnostics() -> None:
              " -> CoinMarketCap" if COINMARKETCAP_API_KEY else "")
     log.info("DOMINANCE_INTERVAL: %ds | SCAN_INTERVAL: %ds",
              DOMINANCE_INTERVAL, SCAN_INTERVAL)
+    log.info("WEAKENING: %s",
+             "enabled" if weakening.WEAKENING_ENABLED else "disabled")
     log.info("=" * 55)
 
     # بررسی واقعی provider هوش مصنوعی
@@ -790,6 +810,7 @@ async def health():
         "open_interest": "binance-futures",
         "sentiment": "alternative.me",
         "coinmarketcap": bool(COINMARKETCAP_API_KEY),
+        "weakening": weakening.WEAKENING_ENABLED,
         "ai": ai_providers(),
     }
 
