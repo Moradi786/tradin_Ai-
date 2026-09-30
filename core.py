@@ -370,6 +370,7 @@ async def volume_analysis(symbol: str) -> Optional[dict]:
     )
 
     return {
+        "price": close_price,
         "volume": current_volume,
         "quote_volume": current_quote_volume,
         "average_volume": avg_volume,
