@@ -33,7 +33,7 @@ WEAKENING_ENABLED = os.getenv("WEAKENING_ENABLED", "true").strip().lower() in (
     "1", "true", "yes",
 )
 
-# حداقل افت/رشد RSI نسبت به ۳ کندل قبل.
+# حداقل افت/رشد RSI نسبت به چند کندل قبل.
 WEAKENING_RSI_DROP = _float("WEAKENING_RSI_DROP", "10")
 
 # ناحیه‌ی افراطی: صعودی بالای HIGH، نزولی زیر LOW.
@@ -48,8 +48,22 @@ WEAKENING_RSI_LOOKBACK = int(os.getenv("WEAKENING_RSI_LOOKBACK", "3"))
 # DETECTION
 # ============================================================
 
-async def rsi_reversal(symbol: str) -> Optional[dict]:
-    """RSI فعلی و RSI چند کندل قبل در تایم‌فریم ۱۵ دقیقه."""
+async def detect_weakening(symbol: str, flow: Optional[dict],
+                           oi: Optional[dict]) -> Optional[dict]:
+    """
+    اگر حرکت در حال مردن باشد دیکشنری برمی‌گرداند:
+      {
+        "direction": "UP" | "DOWN",
+        "rsi": {"current": float, "previous": float}
+      }
+      UP   → حرکت صعودی در حال تضعیف (ریسک ریزش)
+      DOWN → حرکت نزولی در حال تضعیف (ریسک پمپ/برگشت)
+    در غیر این صورت None.
+    """
+    if not WEAKENING_ENABLED:
+        return None
+
+    # RSI فعلی و RSI چند کندل قبل در تایم‌فریم ۱۵ دقیقه
     data = await klines(symbol, "15m", 60)
     if len(data) < 30:
         return None
@@ -61,26 +75,7 @@ async def rsi_reversal(symbol: str) -> Optional[dict]:
     if current is None or previous is None:
         return None
 
-    return {"current": current, "previous": previous}
-
-
-async def detect_weakening(symbol: str, flow: Optional[dict],
-                           oi: Optional[dict]) -> Optional[str]:
-    """
-    اگر حرکت در حال مردن باشد جهتش را برمی‌گرداند:
-      "UP"   → حرکت صعودی در حال تضعیف (ریسک ریزش)
-      "DOWN" → حرکت نزولی در حال تضعیف (ریسک پمپ/برگشت)
-    در غیر این صورت None.
-    """
-    if not WEAKENING_ENABLED:
-        return None
-
-    r = await rsi_reversal(symbol)
-    if not r:
-        return None
-
-    current = r["current"]
-    previous = r["previous"]
+    rsi_data = {"current": current, "previous": previous}
 
     # تأییدیه‌ها: بستن پوزیشن‌ها یا برگشت جریان پول
     oi_falling = bool(oi and oi["change_pct"] < 0)
@@ -93,7 +88,7 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
         and current <= previous - WEAKENING_RSI_DROP
         and (oi_falling or flow_not_bullish)
     ):
-        return "UP"
+        return {"direction": "UP", "rsi": rsi_data}
 
     # حرکت نزولی در حال مردن
     if (
@@ -101,7 +96,7 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
         and current >= previous + WEAKENING_RSI_DROP
         and (oi_falling or flow_not_bearish)
     ):
-        return "DOWN"
+        return {"direction": "DOWN", "rsi": rsi_data}
 
     return None
 
@@ -110,20 +105,20 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
 # MESSAGE
 # ============================================================
 
-def weakening_message(direction: str, symbol: str, rsi_data: dict,
+def weakening_message(result: dict, symbol: str,
                       flow: Optional[dict], oi: Optional[dict],
                       flow_text_fn, oi_text_fn) -> str:
-    if direction == "UP":
-        emoji = "⚪"
+    rsi_data = result["rsi"]
+
+    if result["direction"] == "UP":
         title = "حرکت صعودی در حال تضعیف است"
         hint = "اگر LONG داری: سود را بگیر.\nاگر نداری: وارد نشو."
     else:
-        emoji = "⚪"
         title = "حرکت نزولی در حال تضعیف است"
         hint = "اگر SHORT داری: سود را بگیر.\nاگر نداری: وارد نشو."
 
     return f"""
-<b>{emoji} WEAKENING</b>
+<b>⚪ WEAKENING</b>
 
 <b>{symbol}</b>
 
