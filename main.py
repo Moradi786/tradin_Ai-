@@ -261,6 +261,15 @@ def can_send(key: str) -> bool:
 SEP = "━━━━━━━━━━━━━━━"
 FOOTER = "⚠️ <i>فقط سیگنال — بدون اجرای معامله</i>"
 
+# جداکننده‌های جهت یونیکد (LRI...PDI). دور هر بخش لاتین/عددی که
+# وسط جملهٔ فارسی می‌آید می‌گذاریم تا تلگرام ترتیبشان را به‌هم نریزد.
+LRI = "⁦"
+PDI = "⁩"
+
+
+def ltr(text) -> str:
+    return f"{LRI}{text}{PDI}"
+
 
 def fmt_big(n: float) -> str:
     """خلاصه‌نویسی اعداد بزرگ: 1.2K / 3.4M / 1.2B"""
@@ -273,7 +282,7 @@ def fmt_big(n: float) -> str:
 
 
 def coin_line(symbol: str, volume: Optional[dict]) -> str:
-    line = f"🪙 <b>#{symbol}</b>"
+    line = f"🪙 <b>#{ltr(symbol)}</b>"
     if volume and volume.get("price"):
         line += f" ┆ 💵 <code>{volume['price']:,.8g}</code>"
     return line
@@ -291,7 +300,7 @@ def market_text(market: dict, direction: str) -> str:
         f"{check(details[k])}{k}" for k in
         ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL2", "TOTAL3")
     )
-    return f"{row} · <b>{count}/5</b>"
+    return f"{ltr(row)} · هم‌راستایی <b>{count}/5</b>"
 
 
 def flow_text(flow: Optional[dict]) -> str:
@@ -312,7 +321,10 @@ def flow_text(flow: Optional[dict]) -> str:
     total = inflow + outflow
     share = inflow / total * 100 if total else 0
 
-    return f"{direction} {fmt_big(netflow)} · خرید <b>{share:.1f}%</b>"
+    return (
+        f"{direction} {ltr(fmt_big(netflow))}"
+        f" · خرید <b>{ltr(f'{share:.1f}%')}</b>"
+    )
 
 
 def oi_text(oi: Optional[dict]) -> str:
@@ -327,7 +339,7 @@ def oi_text(oi: Optional[dict]) -> str:
     else:
         arrow, note = "⚪", "بدون تغییر"
 
-    return f"{arrow} <b>{change:+.2f}%</b> · {note}"
+    return f"{arrow} <b>{ltr(f'{change:+.2f}%')}</b> · {note}"
 
 
 def fg_text(fg: Optional[dict]) -> str:
@@ -346,7 +358,7 @@ def fg_text(fg: Optional[dict]) -> str:
     else:
         emoji = "🤑"
 
-    return f"{emoji} <b>{value}</b> {fg['label']}"
+    return f"{emoji} <b>{value}</b> {ltr(fg['label'])}"
 
 
 def btc_text(btc: dict) -> str:
@@ -357,15 +369,15 @@ def btc_text(btc: dict) -> str:
 
     change = btc["change"] if btc["change"] is not None else 0
     return (
-        f"{btc['pair']} {dir_emoji} <b>{btc['direction']}</b>"
-        f" ({change:+.2f}%)"
+        f"{ltr(btc['pair'])} {dir_emoji} <b>{ltr(btc['direction'])}</b>"
+        f" {ltr(f'({change:+.2f}%)')}"
     )
 
 
 def lwc_text(lwc: Optional[dict]) -> str:
     if not lwc:
         return "⚪ در دسترس نیست"
-    return (
+    return ltr(
         f"${fmt_big(lwc['volume'])} · V/MC {lwc['vol_to_mcap']:.2f}"
         f" · 24H {lwc['change_24h']:+.2f}%"
     )
@@ -379,8 +391,8 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 <b>{emoji} {direction} SIGNAL</b>
 {coin_line(symbol, volume)}
 {SEP}
-📊 RSI ┆ 15m <b>{rsi_data['15m']:.1f}</b> · 1H <b>{rsi_data['1h']:.1f}</b> · 4H <b>{rsi_data['4h']:.1f}</b>
-📈 VOL ┆ <b>{volume['volume_ratio']:.2f}x</b> · {volume['price_move']:+.2f}% · خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
+📊 RSI ┆ {ltr(f"15m {rsi_data['15m']:.1f} · 1H {rsi_data['1h']:.1f} · 4H {rsi_data['4h']:.1f}")}
+📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
 📦 OI ┆ {oi_text(oi)}
 💰 FLOW ┆ {flow_text(flow)}
 ₿ BTC ┆ {btc_text(btc)}
@@ -401,7 +413,7 @@ def early_message(symbol, volume, lwc, flow, oi=None, fg=None) -> str:
 {coin_line(symbol, volume)}
 حجم و پول وارد شده؛ قیمت هنوز حرکت نکرده.
 {SEP}
-📈 VOL ┆ <b>{volume['volume_ratio']:.2f}x</b> · {volume['price_move']:+.2f}% · خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
+📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
 📦 OI ┆ {oi_text(oi)}
 💰 FLOW ┆ {flow_text(flow)}
 🌐 LWC ┆ {lwc_text(lwc)}

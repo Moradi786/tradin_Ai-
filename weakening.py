@@ -108,6 +108,14 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
 SEP = "━━━━━━━━━━━━━━━"
 FOOTER = "⚠️ <i>فقط سیگنال — بدون اجرای معامله</i>"
 
+# جداکننده‌های جهت یونیکد (LRI...PDI) برای ترکیب درست فارسی/لاتین.
+LRI = "⁦"
+PDI = "⁩"
+
+
+def ltr(text) -> str:
+    return f"{LRI}{text}{PDI}"
+
 
 def weakening_message(result: dict, symbol: str,
                       flow: Optional[dict], oi: Optional[dict],
@@ -116,16 +124,28 @@ def weakening_message(result: dict, symbol: str,
 
     if result["direction"] == "UP":
         title = "⏳ حرکت صعودی در حال تضعیف است"
-        hint = "LONG داری ← <b>سود را بگیر</b> · نداری ← <b>وارد نشو</b>"
+        hint = (
+            f"{ltr('LONG')} داری ← <b>سود را بگیر</b>"
+            " · نداری ← <b>وارد نشو</b>"
+        )
     else:
         title = "⏳ حرکت نزولی در حال تضعیف است"
-        hint = "SHORT داری ← <b>سود را بگیر</b> · نداری ← <b>وارد نشو</b>"
+        hint = (
+            f"{ltr('SHORT')} داری ← <b>سود را بگیر</b>"
+            " · نداری ← <b>وارد نشو</b>"
+        )
+
+    rsi_line = ltr(
+        f"{rsi_data['previous']:.1f} → {rsi_data['current']:.1f}"
+        f" ({rsi_data['current'] - rsi_data['previous']:+.1f})"
+    )
 
     return f"""
 <b>⚪ WEAKENING</b>
-🪙 <b>#{symbol}</b> ┆ {title}
+🪙 <b>#{ltr(symbol)}</b>
+{title}
 {SEP}
-📉 RSI ┆ {rsi_data['previous']:.1f} → <b>{rsi_data['current']:.1f}</b> ({rsi_data['current'] - rsi_data['previous']:+.1f})
+📉 RSI ┆ {rsi_line}
 📦 OI ┆ {oi_text_fn(oi)}
 💰 FLOW ┆ {flow_text_fn(flow)}
 {SEP}
