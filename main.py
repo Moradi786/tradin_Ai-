@@ -719,7 +719,9 @@ async def startup_diagnostics() -> None:
         log.info("Telegram chat OK: %s", chat["result"].get("type"))
 
 
-@app.get("/")
+# HEAD هم پشتیبانی می‌شود تا پینگ‌های مانیتورینگ (Render/UptimeRobot)
+# به‌جای 405 پاسخ 200 بگیرند.
+@app.api_route("/", methods=["GET", "HEAD"])
 async def health():
     return {
         "status": "online",
