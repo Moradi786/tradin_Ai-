@@ -643,6 +643,12 @@ async def fear_greed() -> Optional[dict]:
 # علت: پلن رایگان CoinMarketCap حدود ۱۰٬۰۰۰ درخواست در ماه می‌دهد
 # و ربات با بازهٔ ۳۰۰ ثانیه نزدیک ۸٬۶۴۰ درخواست مصرف می‌کرد.
 
+# منبعی که پی‌درپی خطا بدهد (مثلاً 429 در آی‌پی‌های اشتراکی Render)
+# به‌مدت SOURCE_FAIL_COOLDOWN ثانیه کنار گذاشته می‌شود تا مستقیم
+# سراغ منبع سالم برویم و درخواست هدر نرود.
+SOURCE_FAIL_COOLDOWN = _int("SOURCE_FAIL_COOLDOWN", "1800")
+_source_blocked_until: dict = {}
+
 
 async def coinmarketcap_global_snapshot() -> Optional[dict]:
     headers = {}
@@ -731,12 +737,22 @@ async def market_global() -> Optional[dict]:
         sources.append(coinmarketcap_global_snapshot)
 
     for source in sources:
+        name = source.__name__
+        if now < _source_blocked_until.get(name, 0):
+            continue  # این منبع موقتاً کنار گذاشته شده (429/خطای مکرر)
+
         snapshot = await source()
         if snapshot:
+            _source_blocked_until.pop(name, None)
             global_cache["timestamp"] = now
             global_cache["data"] = snapshot
             return snapshot
-        log.warning("dominance source failed: %s", source.__name__)
+
+        _source_blocked_until[name] = now + SOURCE_FAIL_COOLDOWN
+        log.warning(
+            "dominance source failed: %s (blocked for %ds)",
+            name, SOURCE_FAIL_COOLDOWN,
+        )
 
     return None
 
