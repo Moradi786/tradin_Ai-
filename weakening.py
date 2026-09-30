@@ -106,7 +106,7 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
 # ============================================================
 
 SEP = "━━━━━━━━━━━━━━━"
-FOOTER = "⚠️ <i>فقط سیگنال — هیچ معامله‌ای اجرا نمی‌شود</i>"
+FOOTER = "⚠️ <i>فقط سیگنال — بدون اجرای معامله</i>"
 
 
 def weakening_message(result: dict, symbol: str,
@@ -116,47 +116,20 @@ def weakening_message(result: dict, symbol: str,
 
     if result["direction"] == "UP":
         title = "⏳ حرکت صعودی در حال تضعیف است"
-        hint = (
-            "├ اگر LONG داری ← <b>سود را بگیر</b>\n"
-            "└ اگر نداری ← <b>وارد نشو</b>"
-        )
+        hint = "اگر LONG داری ← <b>سود را بگیر</b> ┆ نداری ← <b>وارد نشو</b>"
     else:
         title = "⏳ حرکت نزولی در حال تضعیف است"
-        hint = (
-            "├ اگر SHORT داری ← <b>سود را بگیر</b>\n"
-            "└ اگر نداری ← <b>وارد نشو</b>"
-        )
+        hint = "اگر SHORT داری ← <b>سود را بگیر</b> ┆ نداری ← <b>وارد نشو</b>"
 
     return f"""
 <b>⚪ WEAKENING ⚪</b>
-
 🪙 <b>#{symbol}</b>
-
 {title}
-
 {SEP}
-
-📉 <b>RSI 15m</b>
-├ قبلی: {rsi_data['previous']:.2f}
-├ فعلی: <b>{rsi_data['current']:.2f}</b>
-└ تغییر: <b>{rsi_data['current'] - rsi_data['previous']:+.2f}</b>
-
+📉 <b>RSI 15m</b> ┆ قبلی {rsi_data['previous']:.1f} → فعلی <b>{rsi_data['current']:.1f}</b> ({rsi_data['current'] - rsi_data['previous']:+.1f})
+📦 <b>OI</b> ┆ {oi_text_fn(oi)}
+💰 <b>FLOW</b> ┆ {flow_text_fn(flow)}
 {SEP}
-
-📦 <b>OPEN INTEREST</b>
-{oi_text_fn(oi)}
-
-{SEP}
-
-💰 <b>MONEY FLOW</b>
-{flow_text_fn(flow)}
-
-{SEP}
-
-💡 <b>پیشنهاد</b>
-{hint}
-
-{SEP}
-
+💡 {hint}
 {FOOTER}
 """

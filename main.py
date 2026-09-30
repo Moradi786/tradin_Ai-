@@ -259,13 +259,23 @@ def can_send(key: str) -> bool:
 # ============================================================
 
 SEP = "━━━━━━━━━━━━━━━"
-FOOTER = "⚠️ <i>فقط سیگنال — هیچ معامله‌ای اجرا نمی‌شود</i>"
+FOOTER = "⚠️ <i>فقط سیگنال — بدون اجرای معامله</i>"
 
 
-def price_text(volume: Optional[dict]) -> str:
+def fmt_big(n: float) -> str:
+    """خلاصه‌نویسی اعداد بزرگ: 1.2K / 3.4M / 1.2B"""
+    n = float(n)
+    for unit in ("", "K", "M", "B", "T"):
+        if abs(n) < 1000 or unit == "T":
+            return f"{n:,.1f}{unit}" if unit else f"{n:,.0f}"
+        n /= 1000
+    return f"{n:,.1f}T"
+
+
+def price_line(volume: Optional[dict]) -> str:
     if not volume or not volume.get("price"):
         return ""
-    return f"💵 Price: <code>{volume['price']:,.8g}</code>\n"
+    return f" 💵 <code>{volume['price']:,.8g}</code>"
 
 
 def market_text(market: dict, direction: str) -> str:
@@ -276,45 +286,40 @@ def market_text(market: dict, direction: str) -> str:
         details = market["short_details"]
         count = market["short"]
 
-    return (
-        f"{check(details['BTC.D'])} BTC.D    {check(details['USDT.D'])} USDT.D\n"
-        f"{check(details['OTHERS.D'])} OTHERS.D    "
-        f"{check(details['TOTAL2'])} TOTAL2\n"
-        f"{check(details['TOTAL3'])} TOTAL3\n"
-        f"\n🎯 هم‌راستایی: <b>{count}/5</b>"
+    row = " ".join(
+        f"{check(details[k])}{k}" for k in
+        ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL2", "TOTAL3")
     )
+    return f"{row}\n🎯 هم‌راستایی: <b>{count}/5</b>"
 
 
 def flow_text(flow: Optional[dict]) -> str:
     if not flow:
-        return "⚪ Money Flow: در دسترس نیست"
+        return "⚪ در دسترس نیست"
 
     inflow = num(flow.get("inflow"))
     outflow = num(flow.get("outflow"))
     netflow = num(flow.get("netflow"))
 
     if netflow > 0:
-        direction = "🟢 ورود پول (INFLOW)"
+        direction = "🟢 ورود پول"
     elif netflow < 0:
-        direction = "🔴 خروج پول (OUTFLOW)"
+        direction = "🔴 خروج پول"
     else:
-        direction = "⚪ خنثی (NEUTRAL)"
+        direction = "⚪ خنثی"
 
     total = inflow + outflow
     share = inflow / total * 100 if total else 0
 
     return (
-        f"{direction}\n"
-        f"├ خرید: {inflow:,.0f}\n"
-        f"├ فروش: {outflow:,.0f}\n"
-        f"├ خالص: {netflow:+,.0f}\n"
-        f"└ سهم خرید: <b>{share:.1f}%</b>"
+        f"{direction} ┆ خالص {fmt_big(netflow)}\n"
+        f"سهم خرید: <b>{share:.1f}%</b>"
     )
 
 
 def oi_text(oi: Optional[dict]) -> str:
     if not oi:
-        return "⚪ Open Interest: در دسترس نیست"
+        return "⚪ در دسترس نیست"
 
     change = oi["change_pct"]
     if change > 0:
@@ -325,15 +330,14 @@ def oi_text(oi: Optional[dict]) -> str:
         arrow, note = "⚪", "بدون تغییر"
 
     return (
-        f"{arrow} <b>{change:+.2f}%</b> ({oi['candles']}×{oi['period']})\n"
-        f"├ OI: {oi['current']:,.0f}\n"
-        f"└ {note}"
+        f"{arrow} <b>{change:+.2f}%</b> ({oi['candles']}×{oi['period']})"
+        f" — {note}"
     )
 
 
 def fg_text(fg: Optional[dict]) -> str:
     if not fg:
-        return "⚪ Fear & Greed: در دسترس نیست"
+        return "⚪ در دسترس نیست"
 
     value = fg["value"]
     if value <= 25:
@@ -356,11 +360,10 @@ def btc_text(btc: dict) -> str:
         "BEARISH": "🔴",
     }.get(btc["direction"], "⚪")
 
+    change = btc["change"] if btc["change"] is not None else 0
     return (
-        f"├ جفت: {btc['pair']}\n"
-        f"├ جهت: {dir_emoji} <b>{btc['direction']}</b>\n"
-        f"└ تغییر نسبی: "
-        f"{btc['change'] if btc['change'] is not None else 0:+.2f}%"
+        f"{btc['pair']} {dir_emoji} <b>{btc['direction']}</b>"
+        f" ({change:+.2f}%)"
     )
 
 
@@ -368,12 +371,8 @@ def lwc_text(lwc: Optional[dict]) -> str:
     if not lwc:
         return "⚪ در دسترس نیست"
     return (
-        f"├ Volume: ${lwc['volume']:,.0f}\n"
-        f"├ Vol/MCap: {lwc['vol_to_mcap']:.2f}\n"
-        f"├ Liquidity: ${lwc['liquidity']:,.0f}\n"
-        f"├ Pressure: {lwc['pressure']:.2f}\n"
-        f"├ 1H: {lwc['change_1h']:+.2f}%\n"
-        f"└ 24H: {lwc['change_24h']:+.2f}%"
+        f"Vol ${fmt_big(lwc['volume'])} ┆ V/MC {lwc['vol_to_mcap']:.2f}\n"
+        f"1H {lwc['change_1h']:+.2f}% ┆ 24H {lwc['change_24h']:+.2f}%"
     )
 
 
@@ -383,60 +382,21 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 
     return f"""
 <b>{emoji} {direction} SIGNAL {emoji}</b>
-
-🪙 <b>#{symbol}</b>
-{price_text(volume)}{SEP}
-
-📊 <b>RSI</b>
-├ 15m: <b>{rsi_data['15m']:.2f}</b>
-├ 1H: <b>{rsi_data['1h']:.2f}</b>
-└ 4H: <b>{rsi_data['4h']:.2f}</b>
-
+🪙 <b>#{symbol}</b>{price_line(volume)}
 {SEP}
-
-📈 <b>BINANCE VOLUME</b>
-├ Volume: <b>{volume['volume_ratio']:.2f}x</b>
-├ Price move: {volume['price_move']:+.2f}%
-└ Buy pressure: <b>{volume['buy_ratio'] * 100:.1f}%</b>
-
-{SEP}
-
-📦 <b>OPEN INTEREST</b>
-{oi_text(oi)}
-
-{SEP}
-
-🌐 <b>LIVECOINWATCH</b>
-{lwc_text(lwc)}
-
-{SEP}
-
-💰 <b>MONEY FLOW</b>
-{flow_text(flow)}
-
-{SEP}
-
-₿ <b>BTC PAIR</b>
-{btc_text(btc)}
-
-{SEP}
-
-🌍 <b>MARKET DOMINANCE</b>
+📊 <b>RSI</b> ┆ 15m <b>{rsi_data['15m']:.1f}</b> ┆ 1H <b>{rsi_data['1h']:.1f}</b> ┆ 4H <b>{rsi_data['4h']:.1f}</b>
+📈 <b>VOLUME</b> ┆ <b>{volume['volume_ratio']:.2f}x</b> ┆ {volume['price_move']:+.2f}% ┆ خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
+📦 <b>OI</b> ┆ {oi_text(oi)}
+💰 <b>FLOW</b> ┆ {flow_text(flow)}
+₿ <b>BTC PAIR</b> ┆ {btc_text(btc)}
+🌍 <b>DOMINANCE</b>
 {market_text(market, direction)}
-
+🌐 <b>LWC</b> ┆ {lwc_text(lwc)}
+😨 <b>SENTIMENT</b> ┆ {fg_text(fg)}
 {SEP}
-
-😨 <b>SENTIMENT</b>
-{fg_text(fg)}
-
-{SEP}
-
 🤖 <b>AI ANALYSIS</b>
-
 {ai}
-
 {SEP}
-
 {FOOTER}
 """
 
@@ -445,43 +405,16 @@ def early_message(symbol, volume, lwc, flow, oi=None, fg=None) -> str:
     lwc = lwc or {}
     return f"""
 <b>🟡 EARLY WATCH 🟡</b>
-
-🪙 <b>#{symbol}</b>
-{price_text(volume)}
-حجم غیرعادی وارد شده، اما قیمت هنوز حرکت بزرگی نکرده —
-<b>Volume + Money Flow</b> قبل از حرکت بزرگ دیده شده است.
-
+🪙 <b>#{symbol}</b>{price_line(volume)}
+حجم و پول وارد شده، اما قیمت هنوز حرکت نکرده.
 {SEP}
-
-📈 <b>BINANCE</b>
-├ Volume: <b>{volume['volume_ratio']:.2f}x</b>
-├ Price: {volume['price_move']:+.2f}%
-└ Buy pressure: <b>{volume['buy_ratio'] * 100:.1f}%</b>
-
+📈 <b>VOLUME</b> ┆ <b>{volume['volume_ratio']:.2f}x</b> ┆ {volume['price_move']:+.2f}% ┆ خرید <b>{volume['buy_ratio'] * 100:.1f}%</b>
+📦 <b>OI</b> ┆ {oi_text(oi)}
+💰 <b>FLOW</b> ┆ {flow_text(flow)}
+🌐 <b>LWC</b> ┆ {lwc_text(lwc)}
+😨 <b>SENTIMENT</b> ┆ {fg_text(fg)}
 {SEP}
-
-📦 <b>OPEN INTEREST</b>
-{oi_text(oi)}
-
-{SEP}
-
-🌐 <b>LIVECOINWATCH</b>
-{lwc_text(lwc)}
-
-{SEP}
-
-💰 <b>MONEY FLOW</b>
-{flow_text(flow)}
-
-{SEP}
-
-😨 <b>SENTIMENT</b>
-{fg_text(fg)}
-
-{SEP}
-
 🟡 هنوز سیگنال نهایی LONG/SHORT نیست.
-
 {FOOTER}
 """
 
