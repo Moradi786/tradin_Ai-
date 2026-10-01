@@ -49,7 +49,8 @@ WEAKENING_RSI_LOOKBACK = int(os.getenv("WEAKENING_RSI_LOOKBACK", "3"))
 # ============================================================
 
 async def detect_weakening(symbol: str, flow: Optional[dict],
-                           oi: Optional[dict]) -> Optional[dict]:
+                           oi: Optional[dict],
+                           closes: Optional[list] = None) -> Optional[dict]:
     """
     اگر حرکت در حال مردن باشد دیکشنری برمی‌گرداند:
       {
@@ -59,16 +60,23 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
       UP   → حرکت صعودی در حال تضعیف (ریسک ریزش)
       DOWN → حرکت نزولی در حال تضعیف (ریسک پمپ/برگشت)
     در غیر این صورت None.
+
+    اگر closes (کندل‌های بستهٔ 15m از volume_analysis) داده شود،
+    درخواست klines تکراری زده نمی‌شود — مهم برای rate-limit بایننس.
     """
     if not WEAKENING_ENABLED:
         return None
 
     # RSI فعلی و RSI چند کندل قبل در تایم‌فریم ۱۵ دقیقه
-    data = await klines(symbol, "15m", 60)
-    if len(data) < 30:
+    if not closes:
+        data = await klines(symbol, "15m", 60)
+        if len(data) < 30:
+            return None
+        closes = [num(x[4]) for x in data]
+
+    if len(closes) < 30:
         return None
 
-    closes = [num(x[4]) for x in data]
     current = rsi(closes)
     previous = rsi(closes[:-WEAKENING_RSI_LOOKBACK])
 
