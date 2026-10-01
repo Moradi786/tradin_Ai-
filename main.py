@@ -568,13 +568,11 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
 async def scan() -> None:
     # اگر بایننس ریت‌لیمیت/بن داده باشد، این دور اسکن رد می‌شود
     # تا بن طولانی‌تر نشود.
-    now = time.time()
+       now = time.time()
     if now < core.binance_blocked_until:
         log.warning(
-            "Scan skipped: binance blocked for %ds more",
-            int(core.binance_blocked_until - now),
+            "Binance banned; scanning with Bybit/OKX fallback",
         )
-        return
 
     log.info("Scanning market...")
 
