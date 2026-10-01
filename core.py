@@ -6,13 +6,19 @@ Crypto AI Signal Bot — core
 این ماژول توسط main.py ایمپورت می‌شود.
 
 منابع داده:
-  - Binance Futures   : klines, tickers, taker flow, open interest (رایگان)
+  - Binance Futures   : klines, tickers, taker flow, open interest (اصلی)
+  - Bybit             : fallback کامل وقتی بایننس بن است (klines/tickers/OI)
+  - OKX               : fallback جریان پول (taker buy/sell) هنگام بن بایننس
   - CoinGecko         : dominance / global market (رایگان، بدون کلید)
   - Coinpaprika       : fallback دادهٔ سراسری (رایگان)
   - CoinMarketCap     : آخرین fallback (در صورت داشتن کلید)
   - LiveCoinWatch     : دادهٔ بازار هر کوین (نیازمند کلید)
   - CryptoMeter       : volume flow (endpoint پولی — اختیاری)
   - alternative.me    : Fear & Greed (رایگان)
+
+نکتهٔ مهم دربارهٔ بن: بن بایننس روی آی‌پی اشتراکی Render فقط مخصوص
+همان صرافی است. وقتی بایننس بن باشد، ربات خودکار با Bybit + OKX
+به اسکن ادامه می‌دهد و بعد از پایان بن به بایننس برمی‌گردد.
 """
 
 import asyncio
@@ -157,15 +163,15 @@ FEAR_GREED_INTERVAL = _int("FEAR_GREED_INTERVAL", "3600")
 FEAR_GREED_MAX_LONG = _float("FEAR_GREED_MAX_LONG", "0")
 FEAR_GREED_MIN_SHORT = _float("FEAR_GREED_MIN_SHORT", "0")
 
-EARLY_FLOW_RATIO = _float("EARLY_FLOW_RATIO", "0.10")
-EARLY_VOLUME_RATIO = _float("EARLY_VOLUME_RATIO", "1.5")
+EARLY_FLOW_RATIO = _float("EARLY_FLOW_RATIO", "0.08")
+EARLY_VOLUME_RATIO = _float("EARLY_VOLUME_RATIO", "1.3")
 MIN_FLOW_RATIO_SIGNAL = _float("MIN_FLOW_RATIO_SIGNAL", "0.15")
 
 # Money Flow از مشتقات بایننس (رایگان). بایننس هر ۵ دقیقه آپدیت می‌کند.
 FLOW_INTERVAL = _int("FLOW_INTERVAL", "300")
 FLOW_PERIOD = os.getenv("FLOW_PERIOD", "15m")
 
-# آستانهٔ مخصوص حجم taker بایننس؛ مقیاسش با CryptoMeter فرق دارد.
+# آستانهٔ مخصوص حجم taker بایننس/OKX؛ مقیاسش با CryptoMeter فرق دارد.
 BINANCE_FLOW_MIN_RATIO = _float("BINANCE_FLOW_MIN_RATIO", "0.06")
 
 BINANCE = "https://fapi.binance.com"
@@ -304,12 +310,178 @@ def prune_cache(cache: dict, max_age: float) -> None:
         log.debug("Pruned %d stale cache entries", len(stale))
 
 
+def binance_blocked() -> bool:
+    return time.time() < binance_blocked_until
+
+
+# ============================================================
+# BYBIT (fallback وقتی بایننس بن است)
+# ============================================================
+
+BYBIT = "https://api.bybit.com"
+OKX = "https://www.okx.com"
+
+_BYBIT_INTERVAL = {
+    "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+    "1h": "60", "2h": "120", "4h": "240", "1d": "D",
+}
+
+
+async def bybit_klines(symbol: str, interval: str, limit: int = 100) -> list:
+    """کندل‌های Bybit، تبدیل‌شده به قالب بایننس تا بقیهٔ کد عوض نشود."""
+    data = await http_get(
+        f"{BYBIT}/v5/market/kline",
+        {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": _BYBIT_INTERVAL.get(interval, "15"),
+            "limit": limit,
+        },
+    )
+    if not data or str(data.get("retCode")) != "0":
+        return []
+
+    rows = (data.get("result") or {}).get("list") or []
+    # Bybit جدیدترین را اول می‌دهد؛ بایننس قدیمی‌ترین را.
+    rows = list(reversed(rows))
+
+    # قالب بایننس: [open_time, open, high, low, close, volume,
+    #               close_time, quote_volume, trades, ..., taker_buy, ...]
+    # Bybit تفکیک taker buy ندارد → اندیس ۱۰ = ۰ → buy_ratio خنثی (0.5)
+    return [
+        [r[0], r[1], r[2], r[3], r[4], r[5], 0, r[6], 0, 0, "0", "0"]
+        for r in rows
+    ]
+
+
+async def bybit_tickers() -> dict:
+    data = await http_get(
+        f"{BYBIT}/v5/market/tickers", {"category": "linear"}
+    )
+    if not data or str(data.get("retCode")) != "0":
+        return {}
+
+    result = {}
+    for item in (data.get("result") or {}).get("list") or []:
+        symbol = item.get("symbol")
+        if symbol and str(symbol).endswith("USDT"):
+            result[symbol] = {
+                "symbol": symbol,
+                "quoteVolume": item.get("turnover24h") or "0",
+                # Bybit درصد را به‌صورت نسبت می‌دهد (0.0123 = 1.23٪)
+                "priceChangePercent": num(item.get("price24hPcnt")) * 100,
+            }
+    return result
+
+
+async def bybit_symbols() -> list:
+    data = await http_get(
+        f"{BYBIT}/v5/market/instruments-info",
+        {"category": "linear", "limit": 1000},
+    )
+    if not data or str(data.get("retCode")) != "0":
+        return []
+
+    return [
+        item["symbol"]
+        for item in (data.get("result") or {}).get("list") or []
+        if item.get("status") == "Trading"
+        and item.get("quoteCoin") == "USDT"
+        and item.get("contractType") == "LinearPerpetual"
+        and str(item.get("symbol", "")).endswith("USDT")
+    ]
+
+
+async def bybit_open_interest(symbol: str) -> Optional[dict]:
+    data = await http_get(
+        f"{BYBIT}/v5/market/open-interest",
+        {
+            "category": "linear",
+            "symbol": symbol,
+            "intervalTime": "15min",
+            "limit": OI_LOOKBACK,
+        },
+    )
+    if not data or str(data.get("retCode")) != "0":
+        return None
+
+    rows = (data.get("result") or {}).get("list") or []
+    if len(rows) < 2:
+        return None
+
+    # Bybit جدیدترین را اول می‌دهد.
+    first = num(rows[-1].get("openInterest"))
+    last = num(rows[0].get("openInterest"))
+    if first <= 0:
+        return None
+
+    return {
+        "current": last,
+        "change_pct": (last - first) / first * 100,
+        "candles": len(rows),
+        "period": "15m",
+    }
+
+
+# ============================================================
+# OKX (fallback جریان پول — taker buy/sell رایگان)
+# ============================================================
+
+
+async def okx_flow(symbol: str) -> Optional[dict]:
+    """حجم taker خرید/فروش از OKX (رایگان، جایگزین Binance futures/data)."""
+    now = time.time()
+    cached = flow_cache.get(symbol)
+    if cached and now - cached["timestamp"] < FLOW_INTERVAL:
+        return cached["data"]
+
+    ccy = symbol.replace("USDT", "")
+    data = await http_get(
+        f"{OKX}/api/v5/rubik/stat/taker-volume",
+        {"ccy": ccy, "instType": "CONTRACTS", "period": "5m"},
+    )
+    if not data or str(data.get("code")) != "0":
+        return None
+
+    rows = data.get("data") or []
+    if not rows:
+        return None
+
+    # قالب: [ts, sell_volume, buy_volume] — جدیدترین اول
+    row = rows[0]
+    try:
+        outflow = num(row[1])
+        inflow = num(row[2])
+    except IndexError:
+        return None
+
+    if inflow <= 0 and outflow <= 0:
+        return None
+
+    total = inflow + outflow
+    result = {
+        "inflow": inflow,
+        "outflow": outflow,
+        "netflow": inflow - outflow,
+        "ratio": (inflow - outflow) / total if total else 0.0,
+        "buy_share": inflow / total if total else 0.5,
+        "source": "okx-taker",
+    }
+
+    flow_cache[symbol] = {"timestamp": now, "data": result}
+    return result
+
+
 # ============================================================
 # BINANCE
 # ============================================================
 
 
 async def binance_symbols() -> list:
+    # وقتی بایننس بن است از لیست نمادهای Bybit استفاده می‌کنیم.
+    if binance_blocked():
+        return await bybit_symbols()
+
     data = await http_get(f"{BINANCE}/fapi/v1/exchangeInfo")
     if not data:
         return []
@@ -330,6 +502,14 @@ async def binance_tickers() -> dict:
     ):
         return tickers_cache["data"]
 
+    # وقتی بایننس بن است از tickers بایبیت استفاده می‌کنیم.
+    if binance_blocked():
+        result = await bybit_tickers()
+        if result:
+            tickers_cache["timestamp"] = now
+            tickers_cache["data"] = result
+        return result
+
     data = await http_get(f"{BINANCE}/fapi/v1/ticker/24hr")
     if not data:
         return {}
@@ -340,6 +520,10 @@ async def binance_tickers() -> dict:
 
 
 async def klines(symbol: str, interval: str, limit: int = 100) -> list:
+    # وقتی بایننس بن است کندل‌ها از Bybit خوانده می‌شوند.
+    if binance_blocked():
+        return await bybit_klines(symbol, interval, limit)
+
     data = await http_get(
         f"{BINANCE}/fapi/v1/klines",
         {"symbol": symbol, "interval": interval, "limit": limit},
@@ -566,7 +750,7 @@ async def cryptometer_flow() -> dict:
 
 
 # ============================================================
-# MONEY FLOW (Binance futures - رایگان)
+# MONEY FLOW (Binance futures - رایگان، fallback: OKX)
 # ============================================================
 
 # جایگزین رایگان CryptoMeter volume-flow. حجم واقعی خرید/فروش
@@ -610,18 +794,25 @@ async def binance_flow(symbol: str) -> Optional[dict]:
 
 async def money_flow(symbol: str) -> Optional[dict]:
     # اگر پلن پولی CryptoMeter فعال باشد از آن استفاده می‌شود،
-    # وگرنه به‌صورت رایگان از مشتقات بایننس خوانده می‌شود.
+    # وگرنه از مشتقات بایننس — و هنگام بن بایننس از OKX.
     base = symbol.replace("USDT", "")
 
     cryptometer = await cryptometer_flow()
     if cryptometer and base in cryptometer:
         return cryptometer[base]
 
-    return await binance_flow(symbol)
+    if binance_blocked():
+        return await okx_flow(symbol)
+
+    flow = await binance_flow(symbol)
+    if flow is None and binance_blocked():
+        # وسط درخواست بن شدیم → OKX
+        return await okx_flow(symbol)
+    return flow
 
 
 # ============================================================
-# OPEN INTEREST (Binance futures - رایگان)
+# OPEN INTEREST (Binance futures - رایگان، fallback: Bybit)
 # ============================================================
 
 
@@ -631,6 +822,13 @@ async def binance_open_interest(symbol: str) -> Optional[dict]:
     cached = oi_cache.get(symbol)
     if cached and now - cached["timestamp"] < FLOW_INTERVAL:
         return cached["data"]
+
+    # وقتی بایننس بن است از OI بایبیت استفاده می‌کنیم.
+    if binance_blocked():
+        data = await bybit_open_interest(symbol)
+        if data:
+            oi_cache[symbol] = {"timestamp": now, "data": data}
+        return data
 
     rows = await http_get(
         f"{BINANCE}/futures/data/openInterestHist",
@@ -907,6 +1105,26 @@ async def btc_pair(symbol: str) -> dict:
     base = symbol.replace("USDT", "")
     pair = f"{base}BTC"
 
+    # حالت fallback هنگام بن بایننس: تغییر ۲۴ ساعتهٔ نسبی به BTC
+    # از tickers (که خودش به Bybit سوئیچ می‌کند).
+    if binance_blocked():
+        tickers = await binance_tickers()
+        alt, btc = tickers.get(symbol), tickers.get("BTCUSDT")
+        if not alt or not btc:
+            return {
+                "pair": f"{base}/BTC",
+                "direction": "UNKNOWN",
+                "change": None,
+            }
+        relative = num(alt.get("priceChangePercent")) - num(
+            btc.get("priceChangePercent")
+        )
+        return {
+            "pair": f"{base}/BTC",
+            "direction": _direction(relative),
+            "change": relative,
+        }
+
     direct = await http_get(
         f"{BINANCE}/fapi/v1/ticker/24hr", {"symbol": pair}
     )
@@ -943,8 +1161,8 @@ async def btc_pair(symbol: str) -> dict:
 
 
 def flow_threshold(flow: Optional[dict], fallback: float) -> float:
-    # آستانهٔ CryptoMeter و حجم taker بایننس هم‌مقیاس نیستند.
-    if flow and flow.get("source") == "binance-taker":
+    # آستانهٔ CryptoMeter و حجم taker بایننس/OKX هم‌مقیاس نیستند.
+    if flow and flow.get("source") in ("binance-taker", "okx-taker"):
         return BINANCE_FLOW_MIN_RATIO
     return fallback
 
