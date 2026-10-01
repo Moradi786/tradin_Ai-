@@ -13,6 +13,7 @@
 قواعد ارزیابی (۴ ساعت بعد):
   LONG      : حرکت >= +WIN_MOVE_PCT  → WIN، <= -WIN_MOVE_PCT → LOSS
   SHORT     : آینه‌ای LONG
+  PRE-MOVE  : مثل LONG/SHORT ولی با جهت BULLISH/BEARISH ذخیره می‌شود
   EARLY     : |حرکت| >= EARLY_WIN_MOVE → WIN (حرکت بزرگ آمد)
   WEAKENING : حرکت متوقف/برگشت → WIN، ادامهٔ قوی در جهت قبلی → LOSS
 """
@@ -167,6 +168,21 @@ def _evaluate(kind: str, direction: str, move_pct: float) -> str:
         if move_pct >= TRACKER_WIN_MOVE:
             return "LOSS"
         return "FLAT"
+    if kind == "PRE":
+        # هشدار قبل از حرکت؛ جهت به‌صورت BULLISH/BEARISH ذخیره شده.
+        if direction == "BULLISH":
+            if move_pct >= TRACKER_WIN_MOVE:
+                return "WIN"
+            if move_pct <= -TRACKER_WIN_MOVE:
+                return "LOSS"
+            return "FLAT"
+        if direction == "BEARISH":
+            if move_pct <= -TRACKER_WIN_MOVE:
+                return "WIN"
+            if move_pct >= TRACKER_WIN_MOVE:
+                return "LOSS"
+            return "FLAT"
+        return "FLAT"
     if kind == "EARLY":
         # هشدار زودهنگام موفق است اگر حرکت بزرگ آمد (هر جهت).
         return "WIN" if abs(move_pct) >= TRACKER_EARLY_WIN_MOVE else "FLAT"
@@ -246,6 +262,69 @@ async def check_pending() -> None:
 
 
 # ============================================================
+# STATS QUERIES (برای گزارش روزانه و منوی تلگرام)
+# ============================================================
+
+
+async def get_stats(since_ts: float):
+    """
+    آمار نتایج از یک زمان به بعد.
+    برمی‌گرداند: (stats, pending)
+      stats   : {kind: {"WIN": n, "LOSS": n, "FLAT": n}}  (ارزیابی‌شده‌ها)
+      pending : {kind: n}  (هنوز ارزیابی نشده)
+    """
+    empty = ({}, {})
+    if not (TRACKING_ENABLED and _init_done):
+        return empty
+
+    rows = await _execute(
+        "SELECT kind, result_4h, COUNT(*) FROM signals"
+        " WHERE ts >= ? AND result_4h IS NOT NULL"
+        " GROUP BY kind, result_4h",
+        [since_ts],
+    )
+    pend_rows = await _execute(
+        "SELECT kind, COUNT(*) FROM signals"
+        " WHERE ts >= ? AND result_4h IS NULL"
+        " GROUP BY kind",
+        [since_ts],
+    )
+    if rows is None and pend_rows is None:
+        return empty
+
+    stats: dict = {}
+    for row in rows or []:
+        try:
+            kind, result = row[0], row[1]
+            count = int(row[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        stats.setdefault(kind, {"WIN": 0, "LOSS": 0, "FLAT": 0})
+        stats[kind][result] = stats[kind].get(result, 0) + count
+
+    pending: dict = {}
+    for row in pend_rows or []:
+        try:
+            pending[row[0]] = int(row[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+
+    return stats, pending
+
+
+async def get_recent(limit: int = 10) -> list:
+    """آخرین سیگنال‌های ثبت‌شده (برای منوی تلگرام)."""
+    if not (TRACKING_ENABLED and _init_done):
+        return []
+    rows = await _execute(
+        "SELECT kind, symbol, direction, price, ts, result_4h, move_4h"
+        " FROM signals ORDER BY id DESC LIMIT ?",
+        [limit],
+    )
+    return rows or []
+
+
+# ============================================================
 # DAILY REPORT
 # ============================================================
 
@@ -261,6 +340,7 @@ def _ltr(text) -> str:
 _KIND_LABEL = {
     "LONG": "🟢 LONG",
     "SHORT": "🔴 SHORT",
+    "PRE": "🔥 PRE-MOVE",
     "EARLY": "⚡ EARLY",
     "WEAK": "⚪ WEAKENING",
 }
@@ -275,51 +355,35 @@ async def maybe_daily_report(telegram_fn) -> None:
     if now - _last_report < REPORT_INTERVAL:
         return
 
-    rows = await _execute(
-        "SELECT kind, result_4h, COUNT(*) FROM signals"
-        " WHERE ts >= ? AND result_4h IS NOT NULL"
-        " GROUP BY kind, result_4h",
-        [now - REPORT_WINDOW],
-    )
-    if rows is None:
+    stats, pending = await get_stats(now - REPORT_WINDOW)
+    if not stats and not pending:
+        # هیچ داده‌ای نیست؛ ولی برای اینکه هر ۲۴ ساعت گم نشود،
+        # فقط وقتی گزارش بده که واقعاً چیزی برای گفتن هست.
+        _last_report = now
         return
 
     _last_report = now
-
-    stats: dict = {}
-    for row in rows:
-        try:
-            kind, result = row[0], row[1]
-            count = int(row[2])
-        except (TypeError, ValueError, IndexError):
-            continue
-        stats.setdefault(kind, {"WIN": 0, "LOSS": 0, "FLAT": 0})
-        stats[kind][result] = stats[kind].get(result, 0) + count
-
-    if not stats:
-        await telegram_fn(
-            "<b>📊 گزارش عملکرد ۲۴ ساعت گذشته</b>\n"
-            f"{SEP}\n"
-            "سیگنال ارزیابی‌شده‌ای در ۲۴ ساعت گذشته نیست."
-        )
-        return
 
     lines = []
     total_win = total_decisive = 0
     for kind, label in _KIND_LABEL.items():
         s = stats.get(kind)
-        if not s:
+        wait = pending.get(kind, 0)
+        if not s and not wait:
             continue
         win, loss, flat = s["WIN"], s["LOSS"], s["FLAT"]
         decisive = win + loss
         total_win += win
         total_decisive += decisive
         pct = f"{win / decisive * 100:.0f}%" if decisive else "—"
-        lines.append(
+        line = (
             f"{label} ┆ {_ltr(f'{win + loss + flat}')} سیگنال"
             f" · ✅ {_ltr(str(win))} · ❌ {_ltr(str(loss))}"
             f" · ➖ {_ltr(str(flat))} · موفقیت <b>{_ltr(pct)}</b>"
         )
+        if wait:
+            line += f" · ⏳ {_ltr(str(wait))}"
+        lines.append(line)
 
     overall = (
         f"{total_win / total_decisive * 100:.0f}%" if total_decisive else "—"
@@ -333,5 +397,6 @@ async def maybe_daily_report(telegram_fn) -> None:
         f"🎯 موفقیت کلی: <b>{_ltr(overall)}</b>\n"
         f"{SEP}\n"
         "ℹ️ بر اساس قیمت ۴ ساعت بعد از هر سیگنال"
+        " · ⏳ = هنوز ارزیابی نشده"
     )
     log.info("TRACKER: daily report sent")
