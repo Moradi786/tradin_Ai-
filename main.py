@@ -23,12 +23,15 @@ import uvicorn
 from fastapi import FastAPI
 
 import core
+import premove
+import telemenu
 import tracker
 import weakening
 from core import *  # noqa: F401,F403  (پیکربندی، دیتا، منطق سیگنال)
 
-# مرجع به تسک اسکنر تا از garbage collection جلوگیری شود.
+# مرجع به تسک‌های پس‌زمینه تا از garbage collection جلوگیری شود.
 scanner_task: Optional[asyncio.Task] = None
+telemenu_task: Optional[asyncio.Task] = None
 
 
 # ============================================================
@@ -464,6 +467,27 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     )
 
             # ==========================
+            # PRE-MOVE (سیگنال چهارم: قبل از حرکت)
+            # ==========================
+            # از داده‌های همین اسکن استفاده می‌کند؛
+            # هیچ درخواست اضافه‌ای به بایننس نمی‌زند.
+            pre = premove.detect_premove(symbol, volume, flow_coin, oi)
+            if pre:
+                key = f"PRE:{symbol}"
+                if can_send(key):
+                    await telegram(
+                        premove.premove_message(
+                            pre, symbol, volume, flow_coin, oi,
+                            flow_text, oi_text,
+                        )
+                    )
+                    log.info("PRE-MOVE: %s %s", pre["direction"], symbol)
+                    await tracker.record_signal(
+                        "PRE", symbol, pre["direction"],
+                        volume.get("price"),
+                    )
+
+            # ==========================
             # WEAKENING (سیگنال سوم)
             # ==========================
             # مستقل از آستانهٔ حجم چک می‌شود؛ تضعیف حرکت
@@ -653,7 +677,7 @@ async def scanner_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    global scanner_task
+    global scanner_task, telemenu_task
 
     await startup_diagnostics()
     await tracker.init_db()
@@ -661,11 +685,16 @@ async def lifespan(app_instance: FastAPI):
     scanner_task = asyncio.create_task(scanner_loop())
     log.info("Scanner task started.")
 
+    # شنوندهٔ /menu تلگرام (فقط وقتی tracker فعال باشد)
+    telemenu_task = asyncio.create_task(telemenu.polling_loop())
+
     try:
         yield
     finally:
         scanner_task.cancel()
-        await asyncio.gather(scanner_task, return_exceptions=True)
+        telemenu_task.cancel()
+        await asyncio.gather(scanner_task, telemenu_task,
+                             return_exceptions=True)
         if core.http_session and not core.http_session.closed:
             await core.http_session.close()
 
@@ -710,8 +739,12 @@ async def startup_diagnostics() -> None:
              DOMINANCE_INTERVAL, SCAN_INTERVAL)
     log.info("WEAKENING: %s",
              "enabled" if weakening.WEAKENING_ENABLED else "disabled")
+    log.info("PREMOVE: %s",
+             "enabled" if premove.PREMOVE_ENABLED else "disabled")
     log.info("TRACKER: %s",
              "enabled (turso)" if tracker.TRACKING_ENABLED else "disabled")
+    log.info("TELEMENU: %s",
+             "enabled (/menu)" if telemenu.enabled() else "disabled")
     log.info("=" * 55)
 
     # بررسی واقعی provider هوش مصنوعی
@@ -771,7 +804,9 @@ async def health():
         "sentiment": "alternative.me",
         "coinmarketcap": bool(COINMARKETCAP_API_KEY),
         "weakening": weakening.WEAKENING_ENABLED,
+        "premove": premove.PREMOVE_ENABLED,
         "tracking": tracker.TRACKING_ENABLED,
+        "menu": telemenu.enabled(),
         "ai": ai_providers(),
     }
 
