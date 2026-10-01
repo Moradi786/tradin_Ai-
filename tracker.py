@@ -1,78 +1,75 @@
 """
-ردیاب عملکرد سیگنال‌ها با دیتابیس رایگان Turso (libSQL)
-=========================================================
+ردیابی عملکرد سیگنال‌ها (Turso / libSQL)
+=========================================
 
-هر سیگنال با قیمت و زمان ذخیره می‌شود؛ بعد از ۱ و ۴ ساعت قیمت
-دوباره چک می‌شود و نتیجه ثبت می‌گردد (WIN / LOSS / NEUTRAL).
-هر ۲۴ ساعت گزارش موفقیت هر نوع سیگنال به تلگرام ارسال می‌شود.
+هر سیگنال ارسال‌شده ذخیره می‌شود و بعد از ۱ و ۴ ساعت با قیمت
+واقعی بایننس ارزیابی می‌شود. هر ۲۴ ساعت یک گزارش موفقیت به
+تلگرام ارسال می‌شود.
 
-بدون کتابخانهٔ جدید — از HTTP API خود Turso (pipeline) استفاده می‌شود.
+اتصال از طریق HTTP Pipeline API تورسو است؛ بدون نیاز به پکیج اضافه.
+اگر TURSO_DATABASE_URL / TURSO_AUTH_TOKEN ست نشده باشد، ردیابی
+خاموش می‌ماند و بقیهٔ ربات بدون تغییر کار می‌کند.
 
-متغیرهای env:
-  TURSO_DATABASE_URL  مثال: libsql://mydb-myorg.turso.io
-  TURSO_AUTH_TOKEN    توکن دیتابیس از داشبورد Turso
+قواعد ارزیابی (۴ ساعت بعد):
+  LONG      : حرکت >= +WIN_MOVE_PCT  → WIN، <= -WIN_MOVE_PCT → LOSS
+  SHORT     : آینه‌ای LONG
+  EARLY     : |حرکت| >= EARLY_WIN_MOVE → WIN (حرکت بزرگ آمد)
+  WEAKENING : حرکت متوقف/برگشت → WIN، ادامهٔ قوی در جهت قبلی → LOSS
 """
 
-import asyncio
 import os
 import time
 from typing import Optional
 
-from core import (
-    BINANCE,
-    TELEGRAM_BOT_TOKEN,
-    TELEGRAM_CHAT_ID,
-    http_get,
-    http_post,
-    log,
-    num,
-)
+import core
+from core import http_get, http_post, log, num
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-TURSO_URL = os.getenv("TURSO_DATABASE_URL", "").strip()
-TURSO_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+def _float(name: str, default: str) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except ValueError:
+        return float(default)
 
-# آدرس libsql:// به https:// تبدیل می‌شود (HTTP pipeline).
-if TURSO_URL.startswith("libsql://"):
-    TURSO_URL = "https://" + TURSO_URL[len("libsql://"):]
-TURSO_URL = TURSO_URL.rstrip("/")
 
-TRACK_ENABLED = bool(TURSO_URL and TURSO_TOKEN)
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "").strip()
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "").strip()
 
-# آستانهٔ موفقیت (درصد تغییر قیمت)
-WIN_PCT = float(os.getenv("TRACK_WIN_PCT", "1.0"))        # LONG/SHORT
-EARLY_WIN_PCT = float(os.getenv("TRACK_EARLY_WIN_PCT", "2.0"))  # EARLY
-WEAK_WIN_PCT = float(os.getenv("TRACK_WEAK_WIN_PCT", "0.5"))    # WEAKENING
+# حداقل حرکت قیمت (٪) برای موفق دانستن LONG/SHORT در ۴ ساعت.
+TRACKER_WIN_MOVE = _float("TRACKER_WIN_MOVE", "1.5")
+# برای EARLY: حرکت بزرگ در هر جهت یعنی هشدار درست بوده.
+TRACKER_EARLY_WIN_MOVE = _float("TRACKER_EARLY_WIN_MOVE", "2.0")
 
 CHECK_1H = 3600
 CHECK_4H = 4 * 3600
-REPORT_INTERVAL = int(os.getenv("TRACK_REPORT_INTERVAL", "86400"))
-KEEP_DAYS = 7  # سیگنال‌های قدیمی‌تر حذف می‌شوند
+REPORT_INTERVAL = 24 * 3600
+REPORT_WINDOW = 24 * 3600
 
-# جداکننده‌های جهت برای ترکیب فارسی/لاتین در گزارش
-LRI = "\u2066"
-PDI = "\u2069"
+TRACKING_ENABLED = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
 
+_last_report = 0.0
+_init_done = False
 
-def ltr(text) -> str:
-    return f"{LRI}{text}{PDI}"
-
-
-_last_report = time.time()
-
-ICONS = {"LONG": "🟢", "SHORT": "🔴", "EARLY": "🟡", "WEAK": "⚪"}
 
 # ============================================================
-# TURSO HTTP CLIENT
+# TURSO HTTP API
 # ============================================================
 
+def _base_url() -> str:
+    url = TURSO_DATABASE_URL
+    if url.startswith("libsql://"):
+        url = "https://" + url[len("libsql://"):]
+    return url.rstrip("/")
 
-def _arg(value):
+
+def _arg(value) -> dict:
     if value is None:
         return {"type": "null"}
+    if isinstance(value, bool):
+        return {"type": "integer", "value": "1" if value else "0"}
     if isinstance(value, int):
         return {"type": "integer", "value": str(value)}
     if isinstance(value, float):
@@ -80,20 +77,18 @@ def _arg(value):
     return {"type": "text", "value": str(value)}
 
 
-async def execute(sql: str, args: Optional[list] = None):
-    """اجرای یک کوئری روی Turso. در خطا None برمی‌گرداند."""
-    if not TRACK_ENABLED:
-        return None
-
+async def _execute(sql: str, args: Optional[list] = None):
+    """اجرای یک statement و برگرداندن ردیف‌ها (لیست لیستی)."""
     stmt = {"sql": sql}
     if args:
         stmt["args"] = [_arg(a) for a in args]
 
     data = await http_post(
-        f"{TURSO_URL}/v2/pipeline",
-        {"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]},
+        f"{_base_url()}/v2/pipeline",
+        {"requests": [{"type": "execute", "stmt": stmt},
+                      {"type": "close"}]},
         {
-            "Authorization": f"Bearer {TURSO_TOKEN}",
+            "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
             "content-type": "application/json",
         },
     )
@@ -101,108 +96,96 @@ async def execute(sql: str, args: Optional[list] = None):
         return None
 
     try:
-        first = data["results"][0]
-        if first.get("type") == "error":
-            log.warning("TURSO ERROR: %s", first.get("error"))
+        result = data["results"][0]
+        if result.get("type") != "ok":
+            log.warning("Turso error: %s", result.get("error"))
             return None
-        return first["response"]["result"]
-    except (KeyError, IndexError, TypeError) as e:
-        log.warning("TURSO PARSE ERROR: %s -> %s", e, str(data)[:200])
+        rows = result["response"]["result"].get("rows", [])
+        return [[cell.get("value") for cell in row] for row in rows]
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
+        log.warning("Turso parse error: %s", e)
         return None
 
 
-def _rows(result) -> list:
-    if not result:
-        return []
-    cols = [c.get("name") for c in result.get("cols", [])]
-    rows = []
-    for row in result.get("rows", []):
-        rows.append({cols[i]: cell.get("value") for i, cell in enumerate(row)})
-    return rows
-
-
 async def init_db() -> None:
-    if not TRACK_ENABLED:
-        log.warning(
-            "TRACKING disabled: set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN"
+    global _init_done
+    if not TRACKING_ENABLED:
+        log.info("TRACKER: disabled (set TURSO_DATABASE_URL + "
+                 "TURSO_AUTH_TOKEN to enable)")
+        return
+
+    rows = await _execute(
+        """
+        CREATE TABLE IF NOT EXISTS signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            direction TEXT DEFAULT '',
+            price REAL NOT NULL,
+            ts REAL NOT NULL,
+            result_1h TEXT,
+            move_1h REAL,
+            result_4h TEXT,
+            move_4h REAL
         )
-        return
-    await execute(
-        "CREATE TABLE IF NOT EXISTS signals ("
-        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " ts REAL NOT NULL,"
-        " type TEXT NOT NULL,"
-        " symbol TEXT NOT NULL,"
-        " direction TEXT DEFAULT '',"
-        " price REAL NOT NULL,"
-        " pct_1h REAL, result_1h TEXT,"
-        " pct_4h REAL, result_4h TEXT"
-        ")"
+        """
     )
-    log.info("TRACKING: turso connected")
-
-
-# ============================================================
-# RECORD
-# ============================================================
-
-
-async def record(type_: str, symbol: str, direction: str,
-                 price: float) -> None:
-    """ثبت سیگنال هنگام ارسال به تلگرام."""
-    if not TRACK_ENABLED or not price:
+    if rows is None:
+        log.warning("TRACKER: Turso init failed (check URL/token)")
         return
-    await execute(
-        "INSERT INTO signals (ts, type, symbol, direction, price)"
+
+    _init_done = True
+    log.info("TRACKER: Turso connected, table ready")
+
+
+# ============================================================
+# RECORD / EVALUATE
+# ============================================================
+
+
+async def record_signal(kind: str, symbol: str, direction: str,
+                        price: float) -> None:
+    if not (TRACKING_ENABLED and _init_done) or not price:
+        return
+    await _execute(
+        "INSERT INTO signals (kind, symbol, direction, price, ts)"
         " VALUES (?, ?, ?, ?, ?)",
-        [time.time(), type_, symbol, direction, float(price)],
+        [kind, symbol, direction, float(price), time.time()],
     )
 
 
-# ============================================================
-# EVALUATION
-# ============================================================
-
-
-def classify(type_: str, direction: str, change: float) -> str:
-    """تغییر قیمت (٪) → WIN / LOSS / NEUTRAL بر اساس نوع سیگنال."""
-    if type_ == "EARLY":
-        # حرکت بزرگ (در هر جهت) = هشدار زودهنگام درست بوده
-        return "WIN" if abs(change) >= EARLY_WIN_PCT else "NEUTRAL"
-
-    if type_ == "WEAK":
-        # سیگنال گفت «حرکت می‌میرد»؛ مردن حرکت = موفقیت
+def _evaluate(kind: str, direction: str, move_pct: float) -> str:
+    if kind == "LONG":
+        if move_pct >= TRACKER_WIN_MOVE:
+            return "WIN"
+        if move_pct <= -TRACKER_WIN_MOVE:
+            return "LOSS"
+        return "FLAT"
+    if kind == "SHORT":
+        if move_pct <= -TRACKER_WIN_MOVE:
+            return "WIN"
+        if move_pct >= TRACKER_WIN_MOVE:
+            return "LOSS"
+        return "FLAT"
+    if kind == "EARLY":
+        # هشدار زودهنگام موفق است اگر حرکت بزرگ آمد (هر جهت).
+        return "WIN" if abs(move_pct) >= TRACKER_EARLY_WIN_MOVE else "FLAT"
+    if kind == "WEAK":
+        # هشدار تضعیف موفق است اگر حرکت ادامهٔ قوی نداشت.
         if direction == "UP":
-            if change <= WEAK_WIN_PCT:
-                return "WIN"
-            if change >= 2 * WEAK_WIN_PCT + 0.5:
+            if move_pct >= TRACKER_WIN_MOVE:
+                return "LOSS"   # حرکت صعودی ادامه یافت
+            return "WIN"        # متوقف/برگشت/ضعیف شد
+        if direction == "DOWN":
+            if move_pct <= -TRACKER_WIN_MOVE:
                 return "LOSS"
-            return "NEUTRAL"
-        # DOWN: حرکت نزولی می‌مرد
-        if change >= -WEAK_WIN_PCT:
             return "WIN"
-        if change <= -(2 * WEAK_WIN_PCT + 0.5):
-            return "LOSS"
-        return "NEUTRAL"
-
-    # LONG / SHORT
-    if direction == "LONG":
-        if change >= WIN_PCT:
-            return "WIN"
-        if change <= -WIN_PCT:
-            return "LOSS"
-        return "NEUTRAL"
-    # SHORT
-    if change <= -WIN_PCT:
-        return "WIN"
-    if change >= WIN_PCT:
-        return "LOSS"
-    return "NEUTRAL"
+    return "FLAT"
 
 
 async def _current_price(symbol: str) -> Optional[float]:
     data = await http_get(
-        f"{BINANCE}/fapi/v1/ticker/price", {"symbol": symbol}
+        f"{core.BINANCE}/fapi/v1/ticker/price", {"symbol": symbol}
     )
     if not data:
         return None
@@ -211,132 +194,144 @@ async def _current_price(symbol: str) -> Optional[float]:
 
 
 async def check_pending() -> None:
-    """سیگنال‌هایی که موعد بررسی‌شان رسیده را ارزیابی می‌کند."""
-    now = time.time()
-    result = await execute(
-        "SELECT id, ts, type, symbol, direction, price, result_1h, result_4h"
-        " FROM signals"
-        " WHERE (ts <= ? AND result_1h IS NULL)"
-        "    OR (ts <= ? AND result_4h IS NULL)"
-        " LIMIT 50",
-        [now - CHECK_1H, now - CHECK_4H],
+    """ارزیابی سیگنال‌های معلق (۱ ساعته و ۴ ساعته)."""
+    if not (TRACKING_ENABLED and _init_done):
+        return
+
+    rows = await _execute(
+        "SELECT id, kind, symbol, direction, price, ts, result_1h"
+        " FROM signals WHERE result_4h IS NULL"
     )
-    for row in _rows(result):
-        price = await _current_price(row["symbol"])
-        if not price:
+    if not rows:
+        return
+
+    now = time.time()
+    for row in rows:
+        try:
+            sig_id = int(row[0])
+            kind, symbol, direction = row[1], row[2], row[3] or ""
+            price, ts = float(row[4]), float(row[5])
+            done_1h = row[6] is not None
+        except (TypeError, ValueError, IndexError):
             continue
 
-        entry = num(row["price"])
-        if not entry:
+        age = now - ts
+        if age < CHECK_1H:
             continue
 
-        change = (price - entry) / entry * 100
-        ts = num(row["ts"])
-        rid = int(num(row["id"]))
+        current = await _current_price(symbol)
+        if not current or not price:
+            continue
 
-        # اول ۴ ساعته، بعد ۱ ساعته (یک ردیف در هر دور فقط یک‌بار)
-        if ts <= now - CHECK_4H and row["result_4h"] is None:
-            await execute(
-                "UPDATE signals SET pct_4h = ?, result_4h = ? WHERE id = ?",
-                [change, classify(row["type"], row["direction"], change), rid],
-            )
-        elif ts <= now - CHECK_1H and row["result_1h"] is None:
-            await execute(
-                "UPDATE signals SET pct_1h = ?, result_1h = ? WHERE id = ?",
-                [change, classify(row["type"], row["direction"], change), rid],
-            )
+        move = (current - price) / price * 100
+        result = _evaluate(kind, direction, move)
 
-    # پاک‌سازی رکوردهای قدیمی
-    await execute("DELETE FROM signals WHERE ts < ?", [now - KEEP_DAYS * 86400])
+        if not done_1h:
+            await _execute(
+                "UPDATE signals SET result_1h = ?, move_1h = ?"
+                " WHERE id = ?",
+                [result, move, sig_id],
+            )
+            log.info("TRACKER 1h: %s %s -> %s (%+.2f%%)",
+                     kind, symbol, result, move)
+
+        if age >= CHECK_4H:
+            await _execute(
+                "UPDATE signals SET result_4h = ?, move_4h = ?"
+                " WHERE id = ?",
+                [result, move, sig_id],
+            )
+            log.info("TRACKER 4h: %s %s -> %s (%+.2f%%)",
+                     kind, symbol, result, move)
 
 
 # ============================================================
 # DAILY REPORT
 # ============================================================
 
+SEP = "━━━━━━━━━━━━━━━"
+LRI = "⁦"
+PDI = "⁩"
 
-async def report_text() -> Optional[str]:
+
+def _ltr(text) -> str:
+    return f"{LRI}{text}{PDI}"
+
+
+_KIND_LABEL = {
+    "LONG": "🟢 LONG",
+    "SHORT": "🔴 SHORT",
+    "EARLY": "⚡ EARLY",
+    "WEAK": "⚪ WEAKENING",
+}
+
+
+async def maybe_daily_report(telegram_fn) -> None:
+    global _last_report
+    if not (TRACKING_ENABLED and _init_done):
+        return
+
     now = time.time()
-    result = await execute(
-        "SELECT type, COUNT(*) AS total,"
-        " SUM(CASE WHEN COALESCE(result_4h, result_1h) = 'WIN'"
-        "     THEN 1 ELSE 0 END) AS wins,"
-        " SUM(CASE WHEN COALESCE(result_4h, result_1h) = 'LOSS'"
-        "     THEN 1 ELSE 0 END) AS losses,"
-        " SUM(CASE WHEN COALESCE(result_4h, result_1h) = 'NEUTRAL'"
-        "     THEN 1 ELSE 0 END) AS neutrals"
-        " FROM signals WHERE ts >= ? GROUP BY type",
-        [now - REPORT_INTERVAL],
+    if now - _last_report < REPORT_INTERVAL:
+        return
+
+    rows = await _execute(
+        "SELECT kind, result_4h, COUNT(*) FROM signals"
+        " WHERE ts >= ? AND result_4h IS NOT NULL"
+        " GROUP BY kind, result_4h",
+        [now - REPORT_WINDOW],
     )
-    rows = _rows(result)
-    if not rows:
-        return None
+    if rows is None:
+        return
+
+    _last_report = now
+
+    stats: dict = {}
+    for row in rows:
+        try:
+            kind, result = row[0], row[1]
+            count = int(row[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        stats.setdefault(kind, {"WIN": 0, "LOSS": 0, "FLAT": 0})
+        stats[kind][result] = stats[kind].get(result, 0) + count
+
+    if not stats:
+        await telegram_fn(
+            "<b>📊 گزارش عملکرد ۲۴ ساعت گذشته</b>\n"
+            f"{SEP}\n"
+            "سیگنال ارزیابی‌شده‌ای در ۲۴ ساعت گذشته نیست."
+        )
+        return
 
     lines = []
-    for row in rows:
-        total = int(num(row["total"]))
-        wins = int(num(row["wins"]))
-        losses = int(num(row["losses"]))
-        neutrals = int(num(row["neutrals"]))
-        decided = wins + losses
-        rate = wins / decided * 100 if decided else 0.0
-        icon = ICONS.get(row["type"], "▫️")
+    total_win = total_decisive = 0
+    for kind, label in _KIND_LABEL.items():
+        s = stats.get(kind)
+        if not s:
+            continue
+        win, loss, flat = s["WIN"], s["LOSS"], s["FLAT"]
+        decisive = win + loss
+        total_win += win
+        total_decisive += decisive
+        pct = f"{win / decisive * 100:.0f}%" if decisive else "—"
         lines.append(
-            f"{icon} {ltr(row['type'])} ┆ {total} سیگنال"
-            f" · ✅ {wins} · ❌ {losses} · ⚪ {neutrals}"
-            f" · موفقیت <b>{ltr(f'{rate:.0f}%')}</b>"
+            f"{label} ┆ {_ltr(f'{win + loss + flat}')} سیگنال"
+            f" · ✅ {_ltr(str(win))} · ❌ {_ltr(str(loss))}"
+            f" · ➖ {_ltr(str(flat))} · موفقیت <b>{_ltr(pct)}</b>"
         )
 
-    sep = "━━━━━━━━━━━━━━━"
-    return (
-        "📊 <b>گزارش عملکرد ۲۴ ساعت گذشته</b>\n"
-        f"{sep}\n"
+    overall = (
+        f"{total_win / total_decisive * 100:.0f}%" if total_decisive else "—"
+    )
+
+    await telegram_fn(
+        "<b>📊 گزارش عملکرد ۲۴ ساعت گذشته</b>\n"
+        f"{SEP}\n"
         + "\n".join(lines)
-        + f"\n{sep}\n"
-        "⏱ موفقیت = نتیجهٔ قیمت ۱H/۴H بعد از سیگنال\n"
-        "⚠️ <i>فقط سیگنال — بدون اجرای معامله</i>"
+        + f"\n{SEP}\n"
+        f"🎯 موفقیت کلی: <b>{_ltr(overall)}</b>\n"
+        f"{SEP}\n"
+        "ℹ️ بر اساس قیمت ۴ ساعت بعد از هر سیگنال"
     )
-
-
-async def _send(text: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    await http_post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
-    )
-
-
-async def maybe_report() -> None:
-    global _last_report
-    if time.time() - _last_report < REPORT_INTERVAL:
-        return
-    text = await report_text()
-    _last_report = time.time()
-    if text:
-        await _send(text)
-        log.info("TRACKING: daily report sent")
-
-
-# ============================================================
-# LOOP
-# ============================================================
-
-
-async def tracker_loop() -> None:
-    if not TRACK_ENABLED:
-        return
-    log.info("Tracker task started.")
-    await asyncio.sleep(60)  # کمی صبر اولیه بعد از استارت
-    while True:
-        try:
-            await check_pending()
-            await maybe_report()
-        except Exception as e:
-            log.error("TRACKER ERROR: %s", e)
-        await asyncio.sleep(120)
+    log.info("TRACKER: daily report sent")
