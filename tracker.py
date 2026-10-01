@@ -4,7 +4,7 @@
 
 هر سیگنال ارسال‌شده ذخیره می‌شود و بعد از ۱ و ۴ ساعت با قیمت
 واقعی بایننس ارزیابی می‌شود. هر ۲۴ ساعت یک گزارش موفقیت به
-تلگرام ارسال می‌شود.
+telegram ارسال می‌شود.
 
 اتصال از طریق HTTP Pipeline API تورسو است؛ بدون نیاز به پکیج اضافه.
 اگر TURSO_DATABASE_URL / TURSO_AUTH_TOKEN ست نشده باشد، ردیابی
@@ -74,7 +74,7 @@ def _arg(value) -> dict:
     if isinstance(value, int):
         return {"type": "integer", "value": str(value)}
     if isinstance(value, float):
-        return {"type": "float", "value": repr(value)}
+        return {"type": "float", "value": value}
     return {"type": "text", "value": str(value)}
 
 
