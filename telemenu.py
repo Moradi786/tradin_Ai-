@@ -266,7 +266,7 @@ async def polling_loop() -> None:
         try:
             data = await http_get(
                 f"{API}/getUpdates",
-                {"offset": _offset, "timeout": 25,
+                {"offset": _offset, "timeout": 10,
                  "allowed_updates": '["message","callback_query"]'},
             )
             if not data or not data.get("ok"):
