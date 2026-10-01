@@ -126,6 +126,17 @@ DOMINANCE_INTERVAL = _int("DOMINANCE_INTERVAL", "60")
 LWC_LIMIT = _int("LWC_LIMIT", "100")
 
 # ------------------------------------------------------------
+# BINANCE RATE LIMIT
+# ------------------------------------------------------------
+
+# کش لیست tickers (وزن بالای endpoint /ticker/24hr بدون symbol).
+TICKERS_INTERVAL = _int("TICKERS_INTERVAL", "60")
+
+# اگر بایننس 418/429 بدهد، اسکن‌ها این مدت متوقف می‌شوند تا بن
+# طولانی‌تر نشود.
+BINANCE_BLOCK_PAUSE = _int("BINANCE_BLOCK_PAUSE", "300")
+
+# ------------------------------------------------------------
 # OPEN INTEREST
 # ------------------------------------------------------------
 
@@ -173,6 +184,7 @@ previous_dominance: Optional[dict] = None
 
 lwc_cache = {"timestamp": 0.0, "data": {}}
 cryptometer_cache = {"timestamp": 0.0, "data": {}}
+tickers_cache = {"timestamp": 0.0, "data": {}}
 
 # کش Money Flow و Open Interest هر نماد (per-symbol).
 flow_cache: dict = {}
@@ -183,6 +195,9 @@ fear_greed_cache = {"timestamp": 0.0, "data": None}
 
 # اگر CryptoMeter endpoint پولی باشد، بعد از اولین خطا غیرفعال می‌شود.
 cryptometer_disabled = False
+
+# تا این زمان، درخواست‌های بایننس متوقف می‌مانند (418/429).
+binance_blocked_until = 0.0
 
 # ============================================================
 # HTTP
@@ -200,6 +215,7 @@ async def get_session() -> aiohttp.ClientSession:
 
 async def _request(method: str, url: str, retries: int = 2, **kwargs):
     """درخواست HTTP با retry ساده. در خطا None برمی‌گرداند."""
+    global binance_blocked_until
     session = await get_session()
     for attempt in range(retries + 1):
         try:
@@ -210,6 +226,15 @@ async def _request(method: str, url: str, retries: int = 2, **kwargs):
                         "HTTP %s %s -> %s: %s",
                         method, url, response.status, body[:300],
                     )
+                    # بن/ریت‌لیمیت بایننس: اسکن‌ها موقتاً متوقف می‌شوند.
+                    if response.status in (418, 429) and "binance" in url:
+                        binance_blocked_until = (
+                            time.time() + BINANCE_BLOCK_PAUSE
+                        )
+                        log.warning(
+                            "Binance rate-limited; scans paused for %ds",
+                            BINANCE_BLOCK_PAUSE,
+                        )
                     # خطای 4xx با retry درست نمی‌شود.
                     if 400 <= response.status < 500:
                         return None
@@ -278,10 +303,20 @@ async def binance_symbols() -> list:
 
 
 async def binance_tickers() -> dict:
+    # endpoint /ticker/24hr بدون symbol وزن بالایی دارد؛ کش می‌شود.
+    now = time.time()
+    if tickers_cache["data"] and (
+        now - tickers_cache["timestamp"] < TICKERS_INTERVAL
+    ):
+        return tickers_cache["data"]
+
     data = await http_get(f"{BINANCE}/fapi/v1/ticker/24hr")
     if not data:
         return {}
-    return {x["symbol"]: x for x in data if x.get("symbol")}
+    result = {x["symbol"]: x for x in data if x.get("symbol")}
+    tickers_cache["timestamp"] = now
+    tickers_cache["data"] = result
+    return result
 
 
 async def klines(symbol: str, interval: str, limit: int = 100) -> list:
@@ -371,6 +406,8 @@ async def volume_analysis(symbol: str) -> Optional[dict]:
 
     return {
         "price": close_price,
+        # کندل‌های بسته‌شده برای WEAKENING تا دوباره klines نگیرد.
+        "closes": [num(x[4]) for x in data[:-1]],
         "volume": current_volume,
         "quote_volume": current_quote_volume,
         "average_volume": avg_volume,
