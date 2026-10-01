@@ -6,6 +6,7 @@ Crypto AI Signal Bot — main
 
 این فایل نقطهٔ ورود است: تحلیل AI، ارسال تلگرام، حلقهٔ اسکنر،
 اپ FastAPI و startup diagnostics. تمام منطق داده و تحلیل در core.py است.
+ردیابی عملکرد سیگنال‌ها در tracker.py است (دیتابیس Turso).
 
 هوش مصنوعی (به ترتیب اولویت، با fallback):
   Gemini -> Groq -> OpenRouter -> OpenAI
@@ -23,11 +24,13 @@ import uvicorn
 from fastapi import FastAPI
 
 import core
+import tracker
 import weakening
 from core import *  # noqa: F401,F403  (پیکربندی، دیتا، منطق سیگنال)
 
-# مرجع به تسک اسکنر تا از garbage collection جلوگیری شود.
+# مرجع به تسک‌های پس‌زمینه تا از garbage collection جلوگیری شود.
 scanner_task: Optional[asyncio.Task] = None
+tracker_task: Optional[asyncio.Task] = None
 
 
 # ============================================================
@@ -457,6 +460,9 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                             flow_coin or {}, oi, fg,
                         )
                     )
+                    await tracker.record(
+                        "EARLY", symbol, "", volume["price"]
+                    )
                     log.info("EARLY WATCH: %s", symbol)
 
             # ==========================
@@ -477,6 +483,9 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                             weak, symbol, flow_coin, oi,
                             flow_text, oi_text,
                         )
+                    )
+                    await tracker.record(
+                        "WEAK", symbol, weak["direction"], volume["price"]
                     )
                     log.info("WEAKENING: %s %s", weak["direction"], symbol)
 
@@ -522,6 +531,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     flow_coin, btc, market, ai, oi, fg,
                 )
             )
+            await tracker.record(direction, symbol, direction, volume["price"])
             log.info("SIGNAL: %s %s", direction, symbol)
 
             await asyncio.sleep(0.25)
@@ -633,18 +643,23 @@ async def scanner_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    global scanner_task
+    global scanner_task, tracker_task
 
     await startup_diagnostics()
+    await tracker.init_db()
 
     scanner_task = asyncio.create_task(scanner_loop())
+    tracker_task = asyncio.create_task(tracker.tracker_loop())
     log.info("Scanner task started.")
 
     try:
         yield
     finally:
         scanner_task.cancel()
-        await asyncio.gather(scanner_task, return_exceptions=True)
+        tracker_task.cancel()
+        await asyncio.gather(
+            scanner_task, tracker_task, return_exceptions=True
+        )
         if core.http_session and not core.http_session.closed:
             await core.http_session.close()
 
@@ -689,6 +704,8 @@ async def startup_diagnostics() -> None:
              DOMINANCE_INTERVAL, SCAN_INTERVAL)
     log.info("WEAKENING: %s",
              "enabled" if weakening.WEAKENING_ENABLED else "disabled")
+    log.info("TRACKING: %s",
+             "turso" if tracker.TRACK_ENABLED else "disabled (set TURSO_*)")
     log.info("=" * 55)
 
     # بررسی واقعی provider هوش مصنوعی
@@ -748,6 +765,7 @@ async def health():
         "sentiment": "alternative.me",
         "coinmarketcap": bool(COINMARKETCAP_API_KEY),
         "weakening": weakening.WEAKENING_ENABLED,
+        "tracking": tracker.TRACK_ENABLED,
         "ai": ai_providers(),
     }
 

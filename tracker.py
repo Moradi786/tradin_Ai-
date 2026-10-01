@@ -13,6 +13,7 @@
   TURSO_AUTH_TOKEN    توکن دیتابیس از داشبورد Turso
 """
 
+import asyncio
 import os
 import time
 from typing import Optional
@@ -331,16 +332,11 @@ async def tracker_loop() -> None:
     if not TRACK_ENABLED:
         return
     log.info("Tracker task started.")
-    await asyncio_sleep_safe(60)  # کمی صبر اولیه بعد از استارت
+    await asyncio.sleep(60)  # کمی صبر اولیه بعد از استارت
     while True:
         try:
             await check_pending()
             await maybe_report()
         except Exception as e:
             log.error("TRACKER ERROR: %s", e)
-        await asyncio_sleep_safe(120)
-
-
-async def asyncio_sleep_safe(seconds: float) -> None:
-    import asyncio
-    await asyncio.sleep(seconds)
+        await asyncio.sleep(120)
