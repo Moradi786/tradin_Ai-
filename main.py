@@ -6,7 +6,6 @@ Crypto AI Signal Bot — main
 
 این فایل نقطهٔ ورود است: تحلیل AI، ارسال تلگرام، حلقهٔ اسکنر،
 اپ FastAPI و startup diagnostics. تمام منطق داده و تحلیل در core.py است.
-ردیابی عملکرد سیگنال‌ها در tracker.py است (دیتابیس Turso).
 
 هوش مصنوعی (به ترتیب اولویت، با fallback):
   Gemini -> Groq -> OpenRouter -> OpenAI
@@ -28,9 +27,8 @@ import tracker
 import weakening
 from core import *  # noqa: F401,F403  (پیکربندی، دیتا، منطق سیگنال)
 
-# مرجع به تسک‌های پس‌زمینه تا از garbage collection جلوگیری شود.
+# مرجع به تسک اسکنر تا از garbage collection جلوگیری شود.
 scanner_task: Optional[asyncio.Task] = None
-tracker_task: Optional[asyncio.Task] = None
 
 
 # ============================================================
@@ -460,10 +458,10 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                             flow_coin or {}, oi, fg,
                         )
                     )
-                    await tracker.record(
-                        "EARLY", symbol, "", volume["price"]
-                    )
                     log.info("EARLY WATCH: %s", symbol)
+                    await tracker.record_signal(
+                        "EARLY", symbol, "", volume.get("price")
+                    )
 
             # ==========================
             # WEAKENING (سیگنال سوم)
@@ -484,10 +482,11 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                             flow_text, oi_text,
                         )
                     )
-                    await tracker.record(
-                        "WEAK", symbol, weak["direction"], volume["price"]
-                    )
                     log.info("WEAKENING: %s %s", weak["direction"], symbol)
+                    await tracker.record_signal(
+                        "WEAK", symbol, weak["direction"],
+                        volume.get("price"),
+                    )
 
             # ==========================
             # FINAL SIGNAL
@@ -531,8 +530,10 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     flow_coin, btc, market, ai, oi, fg,
                 )
             )
-            await tracker.record(direction, symbol, direction, volume["price"])
             log.info("SIGNAL: %s %s", direction, symbol)
+            await tracker.record_signal(
+                direction, symbol, direction, volume.get("price")
+            )
 
             await asyncio.sleep(0.25)
 
@@ -620,6 +621,15 @@ async def scan() -> None:
     prune_cache(flow_cache, FLOW_INTERVAL * 4)
     prune_cache(oi_cache, FLOW_INTERVAL * 4)
 
+    # ------------------------------
+    # TRACKER: ارزیابی سیگنال‌های قبلی + گزارش روزانه
+    # ------------------------------
+    try:
+        await tracker.check_pending()
+        await tracker.maybe_daily_report(telegram)
+    except Exception as e:
+        log.warning("TRACKER error: %s", e)
+
 
 # ============================================================
 # BACKGROUND LOOP
@@ -643,23 +653,19 @@ async def scanner_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    global scanner_task, tracker_task
+    global scanner_task
 
     await startup_diagnostics()
     await tracker.init_db()
 
     scanner_task = asyncio.create_task(scanner_loop())
-    tracker_task = asyncio.create_task(tracker.tracker_loop())
     log.info("Scanner task started.")
 
     try:
         yield
     finally:
         scanner_task.cancel()
-        tracker_task.cancel()
-        await asyncio.gather(
-            scanner_task, tracker_task, return_exceptions=True
-        )
+        await asyncio.gather(scanner_task, return_exceptions=True)
         if core.http_session and not core.http_session.closed:
             await core.http_session.close()
 
@@ -704,8 +710,8 @@ async def startup_diagnostics() -> None:
              DOMINANCE_INTERVAL, SCAN_INTERVAL)
     log.info("WEAKENING: %s",
              "enabled" if weakening.WEAKENING_ENABLED else "disabled")
-    log.info("TRACKING: %s",
-             "turso" if tracker.TRACK_ENABLED else "disabled (set TURSO_*)")
+    log.info("TRACKER: %s",
+             "enabled (turso)" if tracker.TRACKING_ENABLED else "disabled")
     log.info("=" * 55)
 
     # بررسی واقعی provider هوش مصنوعی
@@ -765,7 +771,7 @@ async def health():
         "sentiment": "alternative.me",
         "coinmarketcap": bool(COINMARKETCAP_API_KEY),
         "weakening": weakening.WEAKENING_ENABLED,
-        "tracking": tracker.TRACK_ENABLED,
+        "tracking": tracker.TRACKING_ENABLED,
         "ai": ai_providers(),
     }
 
