@@ -200,13 +200,25 @@ def _evaluate(kind: str, direction: str, move_pct: float) -> str:
 
 
 async def _current_price(symbol: str) -> Optional[float]:
+    if not core.binance_blocked():
+        data = await http_get(
+            f"{core.BINANCE}/fapi/v1/ticker/price", {"symbol": symbol}
+        )
+        if data:
+            price = num(data.get("price"))
+            if price:
+                return price
+    # fallback Bybit هنگام بن بایننس
     data = await http_get(
-        f"{core.BINANCE}/fapi/v1/ticker/price", {"symbol": symbol}
+        f"{core.BYBIT}/v5/market/tickers",
+        {"category": "linear", "symbol": symbol},
     )
-    if not data:
-        return None
-    price = num(data.get("price"))
-    return price or None
+    if data and str(data.get("retCode")) == "0":
+        rows = (data.get("result") or {}).get("list") or []
+        if rows:
+            price = num(rows[0].get("lastPrice"))
+            return price or None
+    return None
 
 
 async def check_pending() -> None:
