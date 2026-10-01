@@ -464,7 +464,11 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # ==========================
             # مستقل از آستانهٔ حجم چک می‌شود؛ تضعیف حرکت
             # معمولاً با خشک شدن حجم همراه است.
-            weak = await weakening.detect_weakening(symbol, flow_coin, oi)
+            # closes از volume_analysis پاس داده می‌شود تا
+            # درخواست klines تکراری زده نشود (rate-limit).
+            weak = await weakening.detect_weakening(
+                symbol, flow_coin, oi, volume.get("closes")
+            )
             if weak:
                 key = f"WEAK:{weak['direction']}:{symbol}"
                 if can_send(key):
@@ -527,6 +531,16 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
 
 
 async def scan() -> None:
+    # اگر بایننس ریت‌لیمیت/بن داده باشد، این دور اسکن رد می‌شود
+    # تا بن طولانی‌تر نشود.
+    now = time.time()
+    if now < core.binance_blocked_until:
+        log.warning(
+            "Scan skipped: binance blocked for %ds more",
+            int(core.binance_blocked_until - now),
+        )
+        return
+
     log.info("Scanning market...")
 
     # ------------------------------
