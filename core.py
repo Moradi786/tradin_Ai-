@@ -18,6 +18,7 @@ Crypto AI Signal Bot — core
 import asyncio
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -132,8 +133,8 @@ LWC_LIMIT = _int("LWC_LIMIT", "100")
 # کش لیست tickers (وزن بالای endpoint /ticker/24hr بدون symbol).
 TICKERS_INTERVAL = _int("TICKERS_INTERVAL", "60")
 
-# اگر بایننس 418/429 بدهد، اسکن‌ها این مدت متوقف می‌شوند تا بن
-# طولانی‌تر نشود.
+# اگر بایننس 418/429 بدهد و زمان دقیق بن در پاسخ نباشد،
+# این مدت مکث می‌کنیم.
 BINANCE_BLOCK_PAUSE = _int("BINANCE_BLOCK_PAUSE", "300")
 
 # ------------------------------------------------------------
@@ -196,12 +197,16 @@ fear_greed_cache = {"timestamp": 0.0, "data": None}
 # اگر CryptoMeter endpoint پولی باشد، بعد از اولین خطا غیرفعال می‌شود.
 cryptometer_disabled = False
 
-# تا این زمان، درخواست‌های بایننس متوقف می‌مانند (418/429).
+# تا این زمان (epoch ثانیه)، درخواست‌های بایننس متوقف می‌مانند.
 binance_blocked_until = 0.0
 
 # ============================================================
 # HTTP
 # ============================================================
+
+# بایننس در پاسخ 418 زمان دقیق پایان بن را می‌گوید:
+#   "... banned until 1790845015074. ..."  (میلی‌ثانیه)
+_BAN_RE = re.compile(r"banned until (\d+)")
 
 
 async def get_session() -> aiohttp.ClientSession:
@@ -213,9 +218,30 @@ async def get_session() -> aiohttp.ClientSession:
     return http_session
 
 
+def _mark_binance_blocked(body: str) -> None:
+    """اگر زمان دقیق بن در پاسخ باشد تا همان لحظه مکث می‌کنیم."""
+    global binance_blocked_until
+    match = _BAN_RE.search(body or "")
+    if match:
+        # +60 ثانیه حاشیهٔ اطمینان بعد از پایان بن
+        until = int(match.group(1)) / 1000 + 60
+        binance_blocked_until = max(binance_blocked_until, until)
+        log.warning(
+            "Binance ban: scans paused for %ds (until ban expiry)",
+            int(binance_blocked_until - time.time()),
+        )
+    else:
+        binance_blocked_until = max(
+            binance_blocked_until, time.time() + BINANCE_BLOCK_PAUSE
+        )
+        log.warning(
+            "Binance rate-limited; scans paused for %ds",
+            BINANCE_BLOCK_PAUSE,
+        )
+
+
 async def _request(method: str, url: str, retries: int = 2, **kwargs):
     """درخواست HTTP با retry ساده. در خطا None برمی‌گرداند."""
-    global binance_blocked_until
     session = await get_session()
     for attempt in range(retries + 1):
         try:
@@ -226,15 +252,9 @@ async def _request(method: str, url: str, retries: int = 2, **kwargs):
                         "HTTP %s %s -> %s: %s",
                         method, url, response.status, body[:300],
                     )
-                    # بن/ریت‌لیمیت بایننس: اسکن‌ها موقتاً متوقف می‌شوند.
+                    # بن/ریت‌لیمیت بایننس: اسکن‌ها تا پایان بن متوقف می‌شوند.
                     if response.status in (418, 429) and "binance" in url:
-                        binance_blocked_until = (
-                            time.time() + BINANCE_BLOCK_PAUSE
-                        )
-                        log.warning(
-                            "Binance rate-limited; scans paused for %ds",
-                            BINANCE_BLOCK_PAUSE,
-                        )
+                        _mark_binance_blocked(body)
                     # خطای 4xx با retry درست نمی‌شود.
                     if 400 <= response.status < 500:
                         return None
