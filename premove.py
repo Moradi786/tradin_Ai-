@@ -13,6 +13,10 @@
 
 جهت احتمالی از علامت netflow و buy_ratio تعیین می‌شود.
 
+سیگنال پنجم: GOLDEN ROTATION (ترکیب طلایی)
+  BTC.D نزولی + آلت از BTC قوی‌تر + OI صعودی + ورود پول
+  + حجم رشد کرده ولی قیمت هنوز نپریده.
+
 این ماژول توسط main.py ایمپورت می‌شود. منطق داده در core.py است.
 """
 
@@ -56,6 +60,18 @@ PREMOVE_RSI_LOOKBACK = int(os.getenv("PREMOVE_RSI_LOOKBACK", "3"))
 
 # حداقل امتیاز لازم از ۴ نشانه.
 PREMOVE_MIN_SCORE = int(os.getenv("PREMOVE_MIN_SCORE", "3"))
+
+# ------------------------------------------------------------
+# GOLDEN ROTATION (ترکیب طلایی: چرخش پول از BTC به آلت)
+# ------------------------------------------------------------
+
+# با ROTATION_ENABLED=false غیرفعال می‌شود.
+ROTATION_ENABLED = os.getenv("ROTATION_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes",
+)
+
+# حداقل برتری تغییر ۲۴ ساعتهٔ آلت نسبت به BTC (٪).
+ROTATION_REL_MIN = _float("ROTATION_REL_MIN", "0.5")
 
 
 # ============================================================
@@ -144,6 +160,57 @@ def detect_premove(symbol: str, volume: Optional[dict],
     }
 
 
+def detect_rotation(symbol: str, volume: Optional[dict],
+                    flow: Optional[dict], oi: Optional[dict],
+                    market: Optional[dict]) -> Optional[dict]:
+    """
+    ترکیب طلایی: پول دارد از بیت‌کوین به این آلت می‌چرخد.
+
+    هر ۵ شرط باید همزمان برقرار باشد:
+      1. BTC.D نزولی است (از market_alignment)
+      2. تغییر ۲۴ساعتهٔ آلت از BTC بهتر است (از کش tickers — درخواست اضافه نمی‌زند)
+      3. OI صعودی = پول جدید وارد پوزیشن‌ها
+      4. جریان پول مثبت (ورود پول)
+      5. حجم رشد کرده ولی قیمت هنوز نپریده
+    """
+    if not ROTATION_ENABLED or not volume or not market:
+        return None
+
+    # ۵) حجم رشد کرده ولی قیمت هنوز حرکت نکرده
+    if not (PREMOVE_VOLUME_MIN <= volume["volume_ratio"]):
+        return None
+    if abs(volume.get("price_move", 0)) > PREMOVE_MAX_PRICE_MOVE:
+        return None
+
+    # ۱) BTC.D نزولی (پول از بیت خارج می‌شود)
+    if not market.get("long_details", {}).get("BTC.D"):
+        return None
+
+    # ۲) آلت از BTC قوی‌تر (از کش tickers؛ بدون درخواست جدید)
+    tickers = core.tickers_cache.get("data") or {}
+    alt, btc = tickers.get(symbol), tickers.get("BTCUSDT")
+    if not alt or not btc:
+        return None
+    rel = num(alt.get("priceChangePercent")) - num(
+        btc.get("priceChangePercent")
+    )
+    if rel < ROTATION_REL_MIN:
+        return None
+
+    # ۳) OI صعودی
+    if not (oi and oi["change_pct"] >= PREMOVE_OI_MIN):
+        return None
+
+    # ۴) جریان پول مثبت
+    if not flow:
+        return None
+    total = num(flow.get("inflow")) + num(flow.get("outflow"))
+    if total <= 0 or num(flow.get("netflow")) / total < PREMOVE_FLOW_RATIO:
+        return None
+
+    return {"direction": "BULLISH", "rel_btc": rel}
+
+
 # ============================================================
 # MESSAGE
 # ============================================================
@@ -158,6 +225,25 @@ PDI = "⁩"
 
 def ltr(text) -> str:
     return f"{LRI}{text}{PDI}"
+
+
+def rotation_message(result: dict, symbol: str, volume: dict,
+                     flow: Optional[dict], oi: Optional[dict],
+                     flow_text_fn, oi_text_fn) -> str:
+    return f"""
+<b>🔥 GOLDEN ROTATION</b>
+🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
+💱 پول از BTC به این کوین می‌چرخد
+{SEP}
+📉 BTC.D ┆ نزولی (خروج پول از بیت)
+💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> قوی‌تر از بیت
+📦 OI ┆ {oi_text_fn(oi)}
+💰 FLOW ┆ {flow_text_fn(flow)}
+📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")}
+{SEP}
+🔥 ترکیب طلایی کامل شد؛ قیمت هنوز حرکت نکرده.
+{FOOTER}
+"""
 
 
 def premove_message(result: dict, symbol: str, volume: dict,
