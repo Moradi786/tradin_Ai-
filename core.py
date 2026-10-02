@@ -7,8 +7,8 @@ Crypto AI Signal Bot — core
 
 منابع داده:
   - Binance Futures   : klines, tickers, taker flow, open interest (اصلی)
-  - Bybit             : fallback کامل وقتی بایننس بن است (klines/tickers/OI)
-  - OKX               : fallback جریان پول (taker buy/sell) هنگام بن بایننس
+  - Bybit             : fallback وقتی بایننس بن است (klines/tickers/OI)
+  - OKX               : fallback لایهٔ سوم (klines/tickers/symbols/OI/flow)
   - CoinGecko         : dominance / global market (رایگان، بدون کلید)
   - Coinpaprika       : fallback دادهٔ سراسری (رایگان)
   - CoinMarketCap     : آخرین fallback (در صورت داشتن کلید)
@@ -460,6 +460,138 @@ async def bybit_open_interest(symbol: str) -> Optional[dict]:
 
 
 # ============================================================
+# OKX — لایهٔ سوم داده (کندل، قیمت، نماد، OI)
+# ============================================================
+
+# نگاشت نماد: BTCUSDT -> BTC-USDT-SWAP
+def _okx_inst(symbol: str) -> str:
+    return symbol.replace("USDT", "-USDT-SWAP")
+
+
+_OKX_INTERVAL = {
+    "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1H", "2h": "2H", "4h": "4H", "1d": "1D",
+}
+
+
+async def okx_klines(symbol: str, interval: str, limit: int = 100) -> list:
+    """کندل‌های OKX، تبدیل‌شده به قالب بایننس تا بقیهٔ کد عوض نشود."""
+    async with okx_sem:
+        await asyncio.sleep(0.3)
+        data = await http_get(
+            f"{OKX}/api/v5/market/candles",
+            {
+                "instId": _okx_inst(symbol),
+                "bar": _OKX_INTERVAL.get(interval, "15m"),
+                "limit": min(limit, 300),
+            },
+        )
+    if not data or str(data.get("code")) != "0":
+        return []
+
+    rows = data.get("data") or []
+    # OKX جدیدترین را اول می‌دهد؛ بایننس قدیمی‌ترین را.
+    rows = list(reversed(rows))
+
+    # قالب OKX: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+    # قالب بایننس: [open_time, open, high, low, close, volume,
+    #               close_time, quote_volume, trades, ..., taker_buy, ...]
+    return [
+        [r[0], r[1], r[2], r[3], r[4], r[5], 0, r[7], 0, 0, "0", "0"]
+        for r in rows
+    ]
+
+
+async def okx_tickers() -> dict:
+    async with okx_sem:
+        await asyncio.sleep(0.3)
+        data = await http_get(
+            f"{OKX}/api/v5/market/tickers", {"instType": "SWAP"}
+        )
+    if not data or str(data.get("code")) != "0":
+        return {}
+
+    result = {}
+    for item in data.get("data") or []:
+        inst = item.get("instId") or ""
+        if not inst.endswith("-USDT-SWAP"):
+            continue
+        symbol = inst.replace("-USDT-SWAP", "USDT")
+        last = num(item.get("last"))
+        open24h = num(item.get("open24h"))
+        # vol24h به قرارداد است؛ ضرب در قیمت = حجم تقریبی دلاری
+        quote_volume = num(item.get("vol24h")) * last
+        change = (
+            (last - open24h) / open24h * 100 if open24h > 0 else 0.0
+        )
+        result[symbol] = {
+            "symbol": symbol,
+            "quoteVolume": str(quote_volume),
+            "priceChangePercent": change,
+        }
+    return result
+
+
+async def okx_symbols() -> list:
+    async with okx_sem:
+        await asyncio.sleep(0.3)
+        data = await http_get(
+            f"{OKX}/api/v5/public/instruments", {"instType": "SWAP"}
+        )
+    if not data or str(data.get("code")) != "0":
+        return []
+
+    return [
+        item["instId"].replace("-USDT-SWAP", "USDT")
+        for item in data.get("data") or []
+        if str(item.get("instId", "")).endswith("-USDT-SWAP")
+        and item.get("state") == "live"
+    ]
+
+
+# OI قبلی OKX برای محاسبهٔ تغییر (OKX فقط مقدار فعلی را می‌دهد).
+_okx_oi_prev: dict = {}
+
+
+async def okx_open_interest(symbol: str) -> Optional[dict]:
+    """OI فعلی OKX؛ تغییر نسبت به snapshot قبلی (≈۵ دقیقه قبل)."""
+    now = time.time()
+    async with okx_sem:
+        await asyncio.sleep(0.3)
+        data = await http_get(
+            f"{OKX}/api/v5/public/open-interest",
+            {"instType": "SWAP", "instId": _okx_inst(symbol)},
+        )
+    if not data or str(data.get("code")) != "0":
+        return None
+
+    rows = data.get("data") or []
+    if not rows:
+        return None
+
+    current = num(rows[0].get("oiUsd")) or num(rows[0].get("oi"))
+    if current <= 0:
+        return None
+
+    prev = _okx_oi_prev.get(symbol)
+    change_pct = 0.0
+    if prev and now - prev["timestamp"] >= 60 and prev["value"] > 0:
+        change_pct = (current - prev["value"]) / prev["value"] * 100
+
+    _okx_oi_prev[symbol] = {"timestamp": now, "value": current}
+    # جلوگیری از رشد بی‌نهایت
+    if len(_okx_oi_prev) > 500:
+        prune_cache(_okx_oi_prev, FLOW_INTERVAL * 4)
+
+    return {
+        "current": current,
+        "change_pct": change_pct,
+        "candles": 2,
+        "period": "5m",
+    }
+
+
+# ============================================================
 # OKX (fallback جریان پول — taker buy/sell رایگان)
 # ============================================================
 
@@ -526,9 +658,12 @@ async def okx_flow(symbol: str) -> Optional[dict]:
 
 
 async def binance_symbols() -> list:
-    # وقتی بایننس بن است از لیست نمادهای Bybit استفاده می‌کنیم.
+    # وقتی بایننس بن است: اول Bybit، بعد OKX.
     if binance_blocked():
-        return await bybit_symbols()
+        symbols = await bybit_symbols()
+        if symbols:
+            return symbols
+        return await okx_symbols()
 
     data = await http_get(f"{BINANCE}/fapi/v1/exchangeInfo")
     if not data:
@@ -550,9 +685,11 @@ async def binance_tickers() -> dict:
     ):
         return tickers_cache["data"]
 
-    # وقتی بایننس بن است از tickers بایبیت استفاده می‌کنیم.
+    # وقتی بایننس بن است: اول Bybit، بعد OKX.
     if binance_blocked():
         result = await bybit_tickers()
+        if not result:
+            result = await okx_tickers()
         if result:
             tickers_cache["timestamp"] = now
             tickers_cache["data"] = result
@@ -568,9 +705,12 @@ async def binance_tickers() -> dict:
 
 
 async def klines(symbol: str, interval: str, limit: int = 100) -> list:
-    # وقتی بایننس بن است کندل‌ها از Bybit خوانده می‌شوند.
+    # وقتی بایننس بن است: اول Bybit، بعد OKX.
     if binance_blocked():
-        return await bybit_klines(symbol, interval, limit)
+        data = await bybit_klines(symbol, interval, limit)
+        if data:
+            return data
+        return await okx_klines(symbol, interval, limit)
 
     data = await http_get(
         f"{BINANCE}/fapi/v1/klines",
@@ -860,7 +1000,7 @@ async def money_flow(symbol: str) -> Optional[dict]:
 
 
 # ============================================================
-# OPEN INTEREST (Binance futures - رایگان، fallback: Bybit)
+# OPEN INTEREST (Binance futures - رایگان، fallback: Bybit → OKX)
 # ============================================================
 
 
@@ -871,9 +1011,11 @@ async def binance_open_interest(symbol: str) -> Optional[dict]:
     if cached and now - cached["timestamp"] < FLOW_INTERVAL:
         return cached["data"]
 
-    # وقتی بایننس بن است از OI بایبیت استفاده می‌کنیم.
+    # وقتی بایننس بن است: اول Bybit، بعد OKX.
     if binance_blocked():
         data = await bybit_open_interest(symbol)
+        if not data:
+            data = await okx_open_interest(symbol)
         if data:
             oi_cache[symbol] = {"timestamp": now, "data": data}
         return data
@@ -1154,7 +1296,7 @@ async def btc_pair(symbol: str) -> dict:
     pair = f"{base}BTC"
 
     # حالت fallback هنگام بن بایننس: تغییر ۲۴ ساعتهٔ نسبی به BTC
-    # از tickers (که خودش به Bybit سوئیچ می‌کند).
+    # از tickers (که خودش به Bybit/OKX سوئیچ می‌کند).
     if binance_blocked():
         tickers = await binance_tickers()
         alt, btc = tickers.get(symbol), tickers.get("BTCUSDT")
