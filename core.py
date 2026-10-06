@@ -19,6 +19,7 @@ Crypto AI Signal Bot — core
   - Coinalyze         : OI/Funding (اختیاری، با کلید رایگان)
   - CoinGecko         : dominance / global market (رایگان، بدون کلید)
   - Coinpaprika       : fallback دادهٔ سراسری (رایگان)
+  - CoinLore Global   : fallback سوم dominance/global (رایگان، بدون کلید)
   - CoinMarketCap     : آخرین fallback (در صورت داشتن کلید)
   - LiveCoinWatch     : دادهٔ بازار هر کوین (نیازمند کلید)
   - CryptoMeter       : volume flow (endpoint پولی — اختیاری)
@@ -144,9 +145,9 @@ CRYPTOMETER_TIMEFRAME = os.getenv("CRYPTOMETER_TIMEFRAME", "15m")
 LWC_INTERVAL = _int("LWC_INTERVAL", "120")
 CMC_INTERVAL = _int("CMC_INTERVAL", "300")
 
-# TTL دادهٔ Global Market. عمداً کمتر از SCAN_INTERVAL است تا
-# هر اسکن دادهٔ تازه ببیند و market_alignment همیشه ۰/۵ نشود.
-DOMINANCE_INTERVAL = _int("DOMINANCE_INTERVAL", "60")
+# TTL دادهٔ Global Market. ۳۰۰ ثانیه انتخاب شده تا فشار درخواست
+# روی منابع رایگان کم شود (آی‌پی اشتراکی Render زود 429 می‌گیرد).
+DOMINANCE_INTERVAL = _int("DOMINANCE_INTERVAL", "300")
 
 LWC_LIMIT = _int("LWC_LIMIT", "100")
 
@@ -1591,7 +1592,8 @@ async def fear_greed() -> Optional[dict]:
 # ترتیب منابع:
 #   1. CoinGecko     - رایگان و بدون کلید (اصلی)
 #   2. Coinpaprika   - رایگان و بدون کلید (fallback)
-#   3. CoinMarketCap - فقط اگر کلید بگذاری (آخرین راه)
+#   3. CoinLore      - رایگان و بدون کلید (fallback دوم)
+#   4. CoinMarketCap - فقط اگر کلید بگذاری (آخرین راه)
 #
 # علت: پلن رایگان CoinMarketCap حدود ۱۰٬۰۰۰ درخواست در ماه می‌دهد
 # و ربات با بازهٔ ۳۰۰ ثانیه نزدیک ۸٬۶۴۰ درخواست مصرف می‌کرد.
@@ -1677,6 +1679,33 @@ async def coinpaprika_global_snapshot() -> Optional[dict]:
     }
 
 
+async def coinlore_global_snapshot() -> Optional[dict]:
+    """CoinLore Global — منبع سوم dominance (رایگان، بدون کلید).
+
+    پاسخ یک لیست تک‌عضوی است: total_mcap, total_volume, btc_d, eth_d.
+    وقتی CoinGecko و Coinpaprika هر دو از کار افتاده باشند (429/402)
+    این منبع جلوی خالی شدن market_alignment را می‌گیرد.
+    """
+    data = await http_get("https://api.coinlore.net/api/global/")
+    if not isinstance(data, list) or not data:
+        return None
+
+    row = data[0]
+    total = num(row.get("total_mcap"))
+    btc_d = num(row.get("btc_d"))
+    if not total or not btc_d:
+        return None
+
+    # CoinLore مقدار USDT dominance را نمی‌دهد.
+    return {
+        "btc_d": btc_d,
+        "eth_d": num(row.get("eth_d")),
+        "usdt_d": 0.0,
+        "total_market_cap": total,
+        "source": "coinlore",
+    }
+
+
 async def market_global() -> Optional[dict]:
     now = time.time()
     if (
@@ -1685,7 +1714,11 @@ async def market_global() -> Optional[dict]:
     ):
         return global_cache["data"]
 
-    sources = [coingecko_global_snapshot, coinpaprika_global_snapshot]
+    sources = [
+        coingecko_global_snapshot,
+        coinpaprika_global_snapshot,
+        coinlore_global_snapshot,
+    ]
     if COINMARKETCAP_API_KEY:
         sources.append(coinmarketcap_global_snapshot)
 
