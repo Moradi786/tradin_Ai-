@@ -11,6 +11,12 @@ Crypto AI Signal Bot — core
   - OKX               : fallback لایهٔ سوم (klines/tickers/symbols/OI/flow)
   - KuCoin Futures    : fallback لایهٔ چهارم (klines/tickers/symbols)
   - Bitget            : fallback لایهٔ پنجم (klines/tickers/symbols/OI)
+  - CryptoCompare     : fallback لایهٔ ششم — کندل و قیمت (رایگان، بدون کلید)
+  - CoinCap/CoinLore  : fallback قیمت و حجم spot (رایگان، بدون کلید)
+  - DeFiLlama         : قیمت لحظه‌ای (رایگان، بدون کلید)
+  - DEX Screener      : قیمت توکن‌های DEX (رایگان، بدون کلید)
+  - CoinGlass         : Funding rate (اختیاری، با کلید رایگان)
+  - Coinalyze         : OI/Funding (اختیاری، با کلید رایگان)
   - CoinGecko         : dominance / global market (رایگان، بدون کلید)
   - Coinpaprika       : fallback دادهٔ سراسری (رایگان)
   - CoinMarketCap     : آخرین fallback (در صورت داشتن کلید)
@@ -101,6 +107,11 @@ LIVECOINWATCH_API_KEY = os.getenv("LIVECOINWATCH_API_KEY", "")
 CRYPTOMETER_API_KEY = os.getenv("CRYPTOMETER_API_KEY", "")
 COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY", "")
 
+# کلیدهای رایگان اختیاری برای Funding/OI. اگر نباشند ربات
+# بدون آن‌ها هم کار می‌کند.
+COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY", "")
+COINALYZE_API_KEY = os.getenv("COINALYZE_API_KEY", "")
+
 SCAN_INTERVAL = _int("SCAN_INTERVAL", "120")
 MAX_SYMBOLS = _int("MAX_SYMBOLS", "100")
 
@@ -120,12 +131,12 @@ SHORT_RSI_15M = _float("SHORT_RSI_15M", "65")
 SHORT_RSI_1H = _float("SHORT_RSI_1H", "60")
 SHORT_RSI_4H = _float("SHORT_RSI_4H", "55")
 
-SIGNAL_COOLDOWN = _int("SIGNAL_COOLDOWN", "1800")
+SIGNAL_COOLDOWN = _int("SIGNAL_COOLDOWN", "3600")
 
 # cooldown جداگانه برای سیگنال‌های پرتعداد؛ EARLY و WEAKENING
 # ذاتاً بیشتر شلیک می‌کنند پس استراحت طولانی‌تری لازم دارند.
-EARLY_COOLDOWN = _int("EARLY_COOLDOWN", "7200")
-WEAK_COOLDOWN = _int("WEAK_COOLDOWN", "3600")
+EARLY_COOLDOWN = _int("EARLY_COOLDOWN", "14400")
+WEAK_COOLDOWN = _int("WEAK_COOLDOWN", "7200")
 
 CRYPTOMETER_FLOW_INTERVAL = _int("CRYPTOMETER_FLOW_INTERVAL", "600")
 CRYPTOMETER_TIMEFRAME = os.getenv("CRYPTOMETER_TIMEFRAME", "15m")
@@ -172,6 +183,16 @@ OI_LOOKBACK = _int("OI_LOOKBACK", "5")
 REQUIRE_OI_RISING = _bool("REQUIRE_OI_RISING")
 
 # ------------------------------------------------------------
+# TREND FILTER (EMA)
+# ------------------------------------------------------------
+
+# اگر true باشد (پیش‌فرض)، LONG فقط وقتی قیمت بالای EMA200 تایم‌فریم
+# ۱ ساعته است و SHORT فقط وقتی زیرش است. سیگنال خلاف روند حذف می‌شود.
+REQUIRE_TREND = _bool("REQUIRE_TREND", "true")
+TREND_EMA_PERIOD = _int("TREND_EMA_PERIOD", "200")
+TREND_CACHE_TTL = _int("TREND_CACHE_TTL", "900")
+
+# ------------------------------------------------------------
 # FEAR & GREED (alternative.me - رایگان)
 # ------------------------------------------------------------
 
@@ -181,8 +202,8 @@ FEAR_GREED_INTERVAL = _int("FEAR_GREED_INTERVAL", "3600")
 FEAR_GREED_MAX_LONG = _float("FEAR_GREED_MAX_LONG", "0")
 FEAR_GREED_MIN_SHORT = _float("FEAR_GREED_MIN_SHORT", "0")
 
-EARLY_FLOW_RATIO = _float("EARLY_FLOW_RATIO", "0.12")
-EARLY_VOLUME_RATIO = _float("EARLY_VOLUME_RATIO", "1.8")
+EARLY_FLOW_RATIO = _float("EARLY_FLOW_RATIO", "0.18")
+EARLY_VOLUME_RATIO = _float("EARLY_VOLUME_RATIO", "2.5")
 MIN_FLOW_RATIO_SIGNAL = _float("MIN_FLOW_RATIO_SIGNAL", "0.15")
 
 # Money Flow از مشتقات بایننس (رایگان). بایننس هر ۵ دقیقه آپدیت می‌کند.
@@ -214,6 +235,9 @@ tickers_cache = {"timestamp": 0.0, "data": {}}
 # کش Money Flow و Open Interest هر نماد (per-symbol).
 flow_cache: dict = {}
 oi_cache: dict = {}
+
+# کش روند EMA هر نماد: symbol -> {"timestamp": ..., "trend": "UP"/"DOWN"}
+trend_cache: dict = {}
 
 global_cache = {"timestamp": 0.0, "data": None}
 fear_greed_cache = {"timestamp": 0.0, "data": None}
@@ -789,6 +813,211 @@ async def bitget_open_interest(symbol: str) -> Optional[dict]:
 
 
 # ============================================================
+# FREE DATA SITES — لایهٔ ششم (رایگان، بدون کلید)
+# ============================================================
+# وقتی هر ۵ صرافی فیوچرز از کار بیفتند، این سایت‌ها آخرین راه‌اند.
+# دقت: دادهٔ آن‌ها spot است نه فیوچرز، ولی برای نجات ربات کافی است.
+
+_CRYPTOCOMPARE_KLINES = {
+    "1m": ("histominute", 1), "3m": ("histominute", 3),
+    "5m": ("histominute", 5), "15m": ("histominute", 15),
+    "30m": ("histominute", 30),
+    "1h": ("histohour", 1), "2h": ("histohour", 2), "4h": ("histohour", 4),
+    "1d": ("histoday", 1),
+}
+
+
+async def cryptocompare_klines(symbol: str, interval: str,
+                               limit: int = 100) -> list:
+    """کندل از CryptoCompare (رایگان، بدون کلید) — تبدیل به قالب بایننس."""
+    base = symbol.replace("USDT", "")
+    endpoint, aggregate = _CRYPTOCOMPARE_KLINES.get(
+        interval, ("histominute", 15)
+    )
+    data = await http_get(
+        f"https://min-api.cryptocompare.com/data/v2/{endpoint}",
+        {
+            "fsym": base,
+            "tsym": "USD",
+            "limit": min(limit, 200),
+            "aggregate": aggregate,
+        },
+    )
+    if not data or str(data.get("Response")) != "Success":
+        return []
+
+    rows = ((data.get("Data") or {}).get("Data")) or []
+    # قالب: {time, open, high, low, close, volumefrom, volumeto} — قدیمی اول
+    return [
+        [r.get("time"), r.get("open"), r.get("high"), r.get("low"),
+         r.get("close"), r.get("volumefrom"), 0, r.get("volumeto"),
+         0, 0, "0", "0"]
+        for r in rows if num(r.get("close")) > 0
+    ]
+
+
+async def coincap_tickers() -> dict:
+    """CoinCap — قیمت و حجم ۲۴ ساعتهٔ spot همهٔ کوین‌ها (رایگان)."""
+    data = await http_get("https://api.coincap.io/v2/assets", {"limit": 500})
+    if not data:
+        return {}
+
+    result = {}
+    for item in data.get("data") or []:
+        code = str(item.get("symbol") or "").upper()
+        if not code:
+            continue
+        symbol = f"{code}USDT"
+        result[symbol] = {
+            "symbol": symbol,
+            "quoteVolume": str(num(item.get("volumeUsd24Hr"))),
+            "priceChangePercent": num(item.get("changePercent24Hr")),
+        }
+    return result
+
+
+async def coinlore_tickers() -> dict:
+    """CoinLore — قیمت و تغییر ۲۴ ساعتهٔ تاپ ۱۰۰ کوین (رایگان)."""
+    data = await http_get(
+        "https://api.coinlore.net/api/tickers/", {"start": 0, "limit": 100}
+    )
+    if not isinstance(data, list):
+        return {}
+
+    result = {}
+    for item in data:
+        code = str(item.get("symbol") or "").upper()
+        if not code:
+            continue
+        symbol = f"{code}USDT"
+        result[symbol] = {
+            "symbol": symbol,
+            "quoteVolume": str(num(item.get("volume24"))),
+            "priceChangePercent": num(item.get("percent_change_24h")),
+        }
+    return result
+
+
+# نگاشت کوین‌های بزرگ به شناسهٔ CoinGecko (برای قیمت DeFiLlama)
+_DEFILLAMA_IDS = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "BNB": "binancecoin", "XRP": "ripple", "DOGE": "dogecoin",
+    "ADA": "cardano", "AVAX": "avalanche-2", "LINK": "chainlink",
+    "TRX": "tron", "DOT": "polkadot", "LTC": "litecoin",
+    "BCH": "bitcoin-cash", "NEAR": "near", "UNI": "uniswap",
+    "ATOM": "cosmos", "FIL": "filecoin", "APT": "aptos",
+    "ARB": "arbitrum", "OP": "optimism", "INJ": "injective-protocol",
+    "SUI": "sui", "SEI": "sei-network", "TIA": "celestia",
+    "PEPE": "pepe", "SHIB": "shiba-inu", "WIF": "dogwifcoin",
+    "FET": "fetch-ai", "RENDER": "render-token",
+}
+
+
+async def defillama_price(base: str) -> Optional[float]:
+    """قیمت لحظه‌ای از DeFiLlama (رایگان، بدون کلید)."""
+    cg_id = _DEFILLAMA_IDS.get(base.upper())
+    if not cg_id:
+        return None
+    data = await http_get(
+        f"https://coins.llama.fi/prices/current/coingecko:{cg_id}"
+    )
+    if not data:
+        return None
+    coin = (data.get("coins") or {}).get(f"coingecko:{cg_id}") or {}
+    price = num(coin.get("price"))
+    return price if price > 0 else None
+
+
+async def dexscreener_price(base: str) -> Optional[float]:
+    """قیمت از DEX Screener (رایگان) — مخصوصاً برای آلت‌های کوچک."""
+    data = await http_get(
+        "https://api.dexscreener.com/latest/dex/search",
+        {"q": f"{base} USDT"},
+    )
+    if not data:
+        return None
+
+    best_price, best_liq = 0.0, 0.0
+    for pair in data.get("pairs") or []:
+        base_sym = str(
+            (pair.get("baseToken") or {}).get("symbol") or ""
+        ).upper()
+        quote_sym = str(
+            (pair.get("quoteToken") or {}).get("symbol") or ""
+        ).upper()
+        if base_sym != base.upper():
+            continue
+        if quote_sym not in ("USDT", "USDC", "WBNB", "WETH", "SOL"):
+            continue
+        liq = num((pair.get("liquidity") or {}).get("usd"))
+        price = num(pair.get("priceUsd"))
+        if price > 0 and liq > best_liq:
+            best_price, best_liq = price, liq
+    return best_price if best_price > 0 else None
+
+
+async def free_site_price(base: str) -> Optional[float]:
+    """آخرین راه برای قیمت لحظه‌ای: DeFiLlama → DEX Screener → CoinCap."""
+    price = await defillama_price(base)
+    if price:
+        return price
+    price = await dexscreener_price(base)
+    if price:
+        return price
+    data = await http_get(f"https://api.coincap.io/v2/assets/{base.lower()}")
+    if data and data.get("data"):
+        price = num(data["data"].get("priceUsd"))
+        if price > 0:
+            return price
+    return None
+
+
+async def coinglass_funding(symbol: str) -> Optional[dict]:
+    """Funding rate از CoinGlass — فقط اگر COINGLASS_API_KEY ست شده."""
+    if not COINGLASS_API_KEY:
+        return None
+    data = await http_get(
+        "https://open-api-v4.coinglass.com/api/futures/funding-rate/ohlc-history",
+        {
+            "exchange": "Binance",
+            "symbol": symbol,
+            "interval": "8h",
+            "limit": 1,
+        },
+        {"CG-API-KEY": COINGLASS_API_KEY},
+    )
+    if not data or str(data.get("code")) != "0":
+        return None
+    rows = data.get("data") or []
+    if not rows:
+        return None
+    rate = num(rows[0].get("close"))
+    return {"funding": rate, "symbol": symbol}
+
+
+async def coinalyze_oi(symbol: str) -> Optional[dict]:
+    """Open Interest فعلی از Coinalyze — فقط اگر COINALYZE_API_KEY ست شده."""
+    if not COINALYZE_API_KEY:
+        return None
+    base = symbol.replace("USDT", "")
+    data = await http_get(
+        "https://api.coinalyze.net/v1/open-interest",
+        {
+            "symbols": f"{base}USDT_PERP.A",
+            "convert_to_usd": "true",
+        },
+        {"api_key": COINALYZE_API_KEY},
+    )
+    if not isinstance(data, list) or not data:
+        return None
+    value = num(data[0].get("value"))
+    if value <= 0:
+        return None
+    return {"current": value, "change_pct": 0.0, "candles": 1,
+            "period": "now"}
+
+
+# ============================================================
 # OKX (fallback جریان پول — taker buy/sell رایگان)
 # ============================================================
 
@@ -884,11 +1113,11 @@ async def binance_tickers() -> dict:
     ):
         return tickers_cache["data"]
 
-    # وقتی بایننس بن است: Bybit → OKX → KuCoin → Bitget.
+    # وقتی بایننس بن است: Bybit → OKX → KuCoin → Bitget → CoinCap → CoinLore.
     if binance_blocked():
         result = {}
-        for source in (bybit_tickers, okx_tickers,
-                       kucoin_tickers, bitget_tickers):
+        for source in (bybit_tickers, okx_tickers, kucoin_tickers,
+                       bitget_tickers, coincap_tickers, coinlore_tickers):
             result = await source()
             if result:
                 break
@@ -907,10 +1136,10 @@ async def binance_tickers() -> dict:
 
 
 async def klines(symbol: str, interval: str, limit: int = 100) -> list:
-    # وقتی بایننس بن است: Bybit → OKX → KuCoin → Bitget.
+    # وقتی بایننس بن است: Bybit → OKX → KuCoin → Bitget → CryptoCompare.
     if binance_blocked():
-        for source in (bybit_klines, okx_klines,
-                       kucoin_klines, bitget_klines):
+        for source in (bybit_klines, okx_klines, kucoin_klines,
+                       bitget_klines, cryptocompare_klines):
             data = await source(symbol, interval, limit)
             if data:
                 return data
@@ -969,6 +1198,72 @@ async def all_rsi(symbol: str) -> dict:
 
 
 # ============================================================
+# EMA / TREND FILTER
+# ============================================================
+
+
+def ema(values: list, period: int) -> Optional[float]:
+    """میانگین متحرک نمایی — مبنای فیلتر روند."""
+    if len(values) < period:
+        return None
+    k = 2 / (period + 1)
+    e = sum(values[:period]) / period
+    for v in values[period:]:
+        e = v * k + e * (1 - k)
+    return e
+
+
+async def trend_direction(symbol: str) -> str:
+    """روند بر اساس EMA200 تایم‌فریم ۱H: UP / DOWN / UNKNOWN.
+
+    نتیجه به‌مدت TREND_CACHE_TTL کش می‌شود تا در هر اسکن برای هر
+    نماد فقط یک بار درخواست اضافی برود.
+    """
+    now = time.time()
+    cached = trend_cache.get(symbol)
+    if cached and now - cached["timestamp"] < TREND_CACHE_TTL:
+        return cached["trend"]
+
+    data = await klines(symbol, "1h", TREND_EMA_PERIOD + 60)
+    trend = "UNKNOWN"
+    if len(data) >= TREND_EMA_PERIOD:
+        closes = [num(x[4]) for x in data]
+        e = ema(closes, TREND_EMA_PERIOD)
+        if e is not None:
+            price = closes[-1]
+            if price > e:
+                trend = "UP"
+            elif price < e:
+                trend = "DOWN"
+
+    trend_cache[symbol] = {"timestamp": now, "trend": trend}
+    if len(trend_cache) > 500:
+        prune_cache(trend_cache, TREND_CACHE_TTL * 4)
+    return trend
+
+
+# ============================================================
+# ATR (برای حد ضرر/تارگت هوشمند)
+# ============================================================
+
+
+def atr_from_rows(rows: list, period: int = 14) -> Optional[float]:
+    """Average True Range از ردیف‌های کندل قالب بایننس."""
+    if len(rows) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(rows)):
+        high = num(rows[i][2])
+        low = num(rows[i][3])
+        prev_close = num(rows[i - 1][4])
+        trs.append(max(high - low, abs(high - prev_close),
+                       abs(low - prev_close)))
+    if len(trs) < period:
+        return None
+    return sum(trs[-period:]) / period
+
+
+# ============================================================
 # BINANCE VOLUME
 # ============================================================
 
@@ -1000,6 +1295,10 @@ async def volume_analysis(symbol: str) -> Optional[dict]:
         taker_buy / current_quote_volume if current_quote_volume else 0.5
     )
 
+    # روند (EMA200 تایم ۱H — کش‌شده) و ATR از همین کندل‌ها.
+    trend = await trend_direction(symbol)
+    atr = atr_from_rows(data[:-1])
+
     return {
         "price": close_price,
         # کندل‌های بسته‌شده برای WEAKENING تا دوباره klines نگیرد.
@@ -1012,6 +1311,8 @@ async def volume_analysis(symbol: str) -> Optional[dict]:
         "taker_buy": taker_buy,
         "taker_sell": taker_sell,
         "buy_ratio": buy_ratio,
+        "trend": trend,
+        "atr": atr,
     }
 
 
@@ -1630,6 +1931,15 @@ def detect_signal(rsi_data, volume, flow, btc, market,
 
     flow_dir = flow_direction(flow)
 
+    # ---------------- TREND (EMA200 1H) ----------------
+    # LONG خلاف روند نزولی و SHORT خلاف روند صعودی حذف می‌شود.
+    # اگر روند نامشخص باشد (کوین جدید)، سیگنال رد نمی‌شود.
+    trend = volume.get("trend") or "UNKNOWN"
+    trend_ok_long = trend_ok_short = True
+    if REQUIRE_TREND:
+        trend_ok_long = trend != "DOWN"
+        trend_ok_short = trend != "UP"
+
     # ---------------- OI / SENTIMENT ----------------
     # پیش‌فرض غیرفعال‌اند تا سیگنال بیش از حد سخت‌گیرانه نشود.
 
@@ -1652,6 +1962,7 @@ def detect_signal(rsi_data, volume, flow, btc, market,
         flow_dir == "BULLISH" or volume["buy_ratio"] >= 0.55,
         btc["direction"] == "BULLISH",
         market["long"] >= 3,
+        trend_ok_long,
         oi_ok_long,
         fg_ok_long,
     ]):
@@ -1664,6 +1975,7 @@ def detect_signal(rsi_data, volume, flow, btc, market,
         flow_dir == "BEARISH" or volume["buy_ratio"] <= 0.45,
         btc["direction"] == "BEARISH",
         market["short"] >= 3,
+        trend_ok_short,
         oi_ok_short,
         fg_ok_short,
     ]):
