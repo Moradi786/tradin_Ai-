@@ -25,12 +25,18 @@ Crypto AI Signal Bot — core
   - CryptoMeter       : volume flow (endpoint پولی — اختیاری)
   - alternative.me    : Fear & Greed (رایگان)
 
+تحلیل بازار:
+  - Market Score      : امتیاز ۰ تا ۱۰۰ کل بازار بر اساس روند EMA20/50
+                        شاخص‌های TOTAL/TOTAL2/TOTAL3/BTC.D/OTHERS.D/
+                        USDT.D/ALT-BTC (جایگزین قانون نویزی ۳ از ۵)
+
 نکتهٔ مهم دربارهٔ بن: بن بایننس روی آی‌پی اشتراکی Render فقط مخصوص
 همان صرافی است. وقتی بایننس بن باشد، ربات خودکار با Bybit + OKX
 به اسکن ادامه می‌دهد و بعد از پایان بن به بایننس برمی‌گردد.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -149,6 +155,34 @@ CMC_INTERVAL = _int("CMC_INTERVAL", "300")
 # روی منابع رایگان کم شود (آی‌پی اشتراکی Render زود 429 می‌گیرد).
 DOMINANCE_INTERVAL = _int("DOMINANCE_INTERVAL", "300")
 
+# ------------------------------------------------------------
+# MARKET SCORE (سیستم امتیاز بازار بر اساس روند EMA)
+# ------------------------------------------------------------
+
+# الهام از استراتژی «Crypto Market Dominance System»: به جای مقایسهٔ
+# دو اسنپ‌شات پشت سر هم (که نویزی است)، روند هر شاخص با EMA20/EMA50
+# سنجیده می‌شود و یک امتیاز ۰ تا ۱۰۰ برای کل بازار ساخته می‌شود:
+#   امتیاز >= MARKET_SCORE_LONG  → بازار برای LONG مناسب است
+#   امتیاز <= MARKET_SCORE_SHORT → بازار برای SHORT مناسب است
+# اگر تاریخچهٔ کافی هنوز جمع نشده باشد، سیستم خودکار به قانون قدیمی
+# ۳ از ۵ (market_alignment) برمی‌گردد.
+MARKET_SCORE_ENABLED = _bool("MARKET_SCORE_ENABLED", "true")
+MARKET_SCORE_LONG = _float("MARKET_SCORE_LONG", "60")
+MARKET_SCORE_SHORT = _float("MARKET_SCORE_SHORT", "40")
+MARKET_SCORE_EMA_FAST = _int("MARKET_SCORE_EMA_FAST", "20")
+MARKET_SCORE_EMA_SLOW = _int("MARKET_SCORE_EMA_SLOW", "50")
+
+# حداقل نقاط تاریخچهٔ لازم برای فعال شدن امتیاز EMA.
+MARKET_SCORE_MIN_POINTS = _int("MARKET_SCORE_MIN_POINTS", "10")
+
+# هر چند ثانیه یک نقطه به تاریخچهٔ dominance اضافه شود (پیش‌فرض ساعتی).
+MARKET_SCORE_SAMPLE = _int("MARKET_SCORE_SAMPLE", "3600")
+
+# تاریخچه روی دیسک ذخیره می‌شود تا با ری‌استارت ربات از دست نرود.
+DOMINANCE_HISTORY_FILE = os.getenv(
+    "DOMINANCE_HISTORY_FILE", "dominance_history.json"
+)
+
 LWC_LIMIT = _int("LWC_LIMIT", "100")
 
 # ------------------------------------------------------------
@@ -239,6 +273,13 @@ oi_cache: dict = {}
 
 # کش روند EMA هر نماد: symbol -> {"timestamp": ..., "trend": "UP"/"DOWN"}
 trend_cache: dict = {}
+
+# تاریخچهٔ dominance برای سیستم امتیاز بازار:
+#   [{"timestamp": ..., "BTC.D": ..., "USDT.D": ..., ...}]
+dominance_history: list = []
+
+# کش روند ALT/BTC (ETH/BTC ساعتی) برای امتیاز بازار.
+altbtc_trend_cache = {"timestamp": 0.0, "trend": "NEUTRAL"}
 
 global_cache = {"timestamp": 0.0, "data": None}
 fear_greed_cache = {"timestamp": 0.0, "data": None}
@@ -1744,6 +1785,160 @@ async def market_global() -> Optional[dict]:
 
 
 # ============================================================
+# MARKET SCORE — امتیاز ۰ تا ۱۰۰ کل بازار با روند EMA
+# ============================================================
+# معادل پایتونی استراتژی «Crypto Market Dominance System»:
+# هر شاخص با EMA20/EMA50 سنجیده می‌شود؛ روند موافق +10 و مخالف -10.
+# شاخص‌های معکوس: BTC.D و USDT.D (نزول آن‌ها برای آلت‌ها خوب است).
+
+
+def _load_dominance_history() -> None:
+    """خواندن تاریخچهٔ dominance از دیسک (در صورت وجود)."""
+    global dominance_history
+    try:
+        with open(DOMINANCE_HISTORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            dominance_history = [
+                row for row in data if isinstance(row, dict)
+            ][-500:]
+            log.info(
+                "Dominance history loaded: %d points",
+                len(dominance_history),
+            )
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.warning("Could not load dominance history: %s", e)
+
+
+def _save_dominance_history() -> None:
+    """ذخیرهٔ تاریخچهٔ dominance روی دیسک تا با ری‌استارت نرود."""
+    try:
+        with open(DOMINANCE_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(dominance_history[-500:], f)
+    except Exception as e:
+        log.warning("Could not save dominance history: %s", e)
+
+
+def record_dominance(snapshot: dict) -> None:
+    """هر MARKET_SCORE_SAMPLE ثانیه یک نقطه به تاریخچه اضافه می‌کند."""
+    now = time.time()
+    if dominance_history:
+        last_ts = num(dominance_history[-1].get("timestamp"))
+        if now - last_ts < MARKET_SCORE_SAMPLE:
+            return
+    dominance_history.append({
+        "timestamp": now,
+        "BTC.D": num(snapshot.get("BTC.D")),
+        "USDT.D": num(snapshot.get("USDT.D")),
+        "OTHERS.D": num(snapshot.get("OTHERS.D")),
+        "TOTAL": num(snapshot.get("TOTAL")),
+        "TOTAL2": num(snapshot.get("TOTAL2")),
+        "TOTAL3": num(snapshot.get("TOTAL3")),
+    })
+    if len(dominance_history) > 500:
+        del dominance_history[:-500]
+    _save_dominance_history()
+
+
+def _series_trend(values: list) -> str:
+    """روند یک سری با EMA20/EMA50: BULL / BEAR / NEUTRAL.
+
+    با دادهٔ کمتر از EMA_SLOW، پریودها متناسب کوتاه می‌شوند تا
+    سیستم از همان روزهای اول هم (تقریبی) کار کند.
+    """
+    values = [v for v in values if v]
+    if len(values) < MARKET_SCORE_MIN_POINTS:
+        return "NEUTRAL"
+    fast_p = min(MARKET_SCORE_EMA_FAST, max(2, len(values) // 2))
+    slow_p = min(MARKET_SCORE_EMA_SLOW, max(3, len(values) - 1))
+    fast = ema(values, fast_p)
+    slow = ema(values, slow_p)
+    if fast is None or slow is None:
+        return "NEUTRAL"
+    last = values[-1]
+    if last > slow and fast > slow:
+        return "BULL"
+    if last < slow and fast < slow:
+        return "BEAR"
+    return "NEUTRAL"
+
+
+async def altbtc_trend() -> str:
+    """روند ALT/BTC با نسبت ETH/BTC از کندل‌های ساعتی (کش ۱ ساعته)."""
+    now = time.time()
+    if now - altbtc_trend_cache["timestamp"] < 3600:
+        return altbtc_trend_cache["trend"]
+
+    alt, btc = await asyncio.gather(
+        klines("ETHUSDT", "1h", 120),
+        klines("BTCUSDT", "1h", 120),
+    )
+    trend = "NEUTRAL"
+    if alt and btc:
+        n = min(len(alt), len(btc))
+        ratio = [
+            num(alt[-n + i][4]) / num(btc[-n + i][4])
+            for i in range(n)
+            if num(btc[-n + i][4]) > 0
+        ]
+        trend = _series_trend(ratio)
+
+    altbtc_trend_cache["timestamp"] = now
+    altbtc_trend_cache["trend"] = trend
+    return trend
+
+
+# شاخص‌ها: (کلید در تاریخچه، معکوس؟)
+# معکوس یعنی نزول آن شاخص برای بازار آلت/ریسک مثبت است.
+_SCORE_COMPONENTS = (
+    ("TOTAL", False),
+    ("TOTAL2", False),
+    ("TOTAL3", False),
+    ("BTC.D", True),
+    ("OTHERS.D", False),
+    ("USDT.D", True),
+)
+
+
+async def compute_market_score() -> Optional[dict]:
+    """امتیاز ۰ تا ۱۰۰ بازار از روی تاریخچهٔ dominance + ALT/BTC.
+
+    اگر تاریخچه کافی نباشد None برمی‌گردد تا قانون قدیمی ۳ از ۵
+    در detect_signal به کار خود ادامه دهد.
+    """
+    if len(dominance_history) < MARKET_SCORE_MIN_POINTS:
+        return None
+
+    score = 50.0
+    components = {}
+
+    for key, invert in _SCORE_COMPONENTS:
+        values = [num(row.get(key)) for row in dominance_history]
+        trend = _series_trend(values)
+        components[key] = trend
+        if trend == "BULL":
+            score += -10 if invert else 10
+        elif trend == "BEAR":
+            score += 10 if invert else -10
+
+    alt_trend = await altbtc_trend()
+    components["ALT/BTC"] = alt_trend
+    if alt_trend == "BULL":
+        score += 10
+    elif alt_trend == "BEAR":
+        score -= 10
+
+    score = max(0.0, min(100.0, score))
+    return {"score": score, "components": components}
+
+
+# بارگذاری تاریخچه در استارتاپ ماژول
+_load_dominance_history()
+
+
+# ============================================================
 # DOMINANCE SNAPSHOT
 # ============================================================
 
@@ -1767,7 +1962,7 @@ async def get_dominance() -> Optional[dict]:
     else:
         others_d = max(0.0, 100 - btc_d - eth_d)
 
-    return {
+    result = {
         "BTC.D": btc_d,
         "USDT.D": usdt_d,
         "OTHERS.D": others_d,
@@ -1777,6 +1972,15 @@ async def get_dominance() -> Optional[dict]:
         "SOURCE": global_data["source"],
         "timestamp": time.time(),
     }
+
+    # ثبت در تاریخچه و محاسبهٔ امتیاز بازار (سیستم EMA).
+    record_dominance(result)
+    score_data = await compute_market_score()
+    if score_data:
+        result["SCORE"] = score_data["score"]
+        result["SCORE_DETAILS"] = score_data["components"]
+
+    return result
 
 
 # ============================================================
@@ -1792,6 +1996,7 @@ def _empty_alignment() -> dict:
         "long": 0,
         "short": 0,
         "total": 5,
+        "score": None,
         "long_details": dict(empty),
         "short_details": dict(empty),
     }
@@ -1814,6 +2019,8 @@ def market_alignment(current: Optional[dict], previous: Optional[dict]) -> dict:
         "long": sum(long_details.values()),
         "short": sum(short_details.values()),
         "total": 5,
+        # امتیاز EMA بازار (اگر تاریخچه کافی جمع شده باشد).
+        "score": current.get("SCORE"),
         "long_details": long_details,
         "short_details": short_details,
     }
@@ -1964,6 +2171,19 @@ def detect_signal(rsi_data, volume, flow, btc, market,
 
     flow_dir = flow_direction(flow)
 
+    # ---------------- MARKET (امتیاز EMA یا قانون ۳ از ۵) ----------------
+    # اگر تاریخچهٔ dominance کافی جمع شده باشد، امتیاز ۰–۱۰۰ بازار
+    # (روند EMA20/50 شاخص‌ها) جایگزین قانون نویزی ۳ از ۵ می‌شود:
+    #   LONG  ← امتیاز >= MARKET_SCORE_LONG  (پیش‌فرض ۶۰)
+    #   SHORT ← امتیاز <= MARKET_SCORE_SHORT (پیش‌فرض ۴۰)
+    mscore = market.get("score")
+    if MARKET_SCORE_ENABLED and mscore is not None:
+        market_long_ok = mscore >= MARKET_SCORE_LONG
+        market_short_ok = mscore <= MARKET_SCORE_SHORT
+    else:
+        market_long_ok = market["long"] >= 3
+        market_short_ok = market["short"] >= 3
+
     # ---------------- TREND (EMA200 1H) ----------------
     # LONG خلاف روند نزولی و SHORT خلاف روند صعودی حذف می‌شود.
     # اگر روند نامشخص باشد (کوین جدید)، سیگنال رد نمی‌شود.
@@ -1994,7 +2214,7 @@ def detect_signal(rsi_data, volume, flow, btc, market,
         volume["volume_ratio"] >= VOLUME_MULTIPLIER,
         flow_dir == "BULLISH" or volume["buy_ratio"] >= 0.55,
         btc["direction"] == "BULLISH",
-        market["long"] >= 3,
+        market_long_ok,
         trend_ok_long,
         oi_ok_long,
         fg_ok_long,
@@ -2007,7 +2227,7 @@ def detect_signal(rsi_data, volume, flow, btc, market,
         volume["volume_ratio"] >= VOLUME_MULTIPLIER,
         flow_dir == "BEARISH" or volume["buy_ratio"] <= 0.45,
         btc["direction"] == "BEARISH",
-        market["short"] >= 3,
+        market_short_ok,
         trend_ok_short,
         oi_ok_short,
         fg_ok_short,
