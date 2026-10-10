@@ -317,7 +317,15 @@ def market_text(market: dict, direction: str) -> str:
         f"{check(details[k])}{k}" for k in
         ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL2", "TOTAL3")
     )
-    return f"{ltr(row)} · هم‌راستایی <b>{count}/5</b>"
+    score = market.get("score")
+    score_line = (
+        f" · امتیاز بازار <b>{float(score):.0f}/100</b>"
+        if score is not None else ""
+    )
+    return (
+        f"{ltr(row)} · هم‌راستایی <b>{count}/5</b>"
+        f"{score_line}"
+    )
 
 
 def flow_text(flow: Optional[dict]) -> str:
