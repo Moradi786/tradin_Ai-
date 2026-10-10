@@ -167,8 +167,8 @@ DOMINANCE_INTERVAL = _int("DOMINANCE_INTERVAL", "300")
 # اگر تاریخچهٔ کافی هنوز جمع نشده باشد، سیستم خودکار به قانون قدیمی
 # ۳ از ۵ (market_alignment) برمی‌گردد.
 MARKET_SCORE_ENABLED = _bool("MARKET_SCORE_ENABLED", "true")
-MARKET_SCORE_LONG = _float("MARKET_SCORE_LONG", "60")
-MARKET_SCORE_SHORT = _float("MARKET_SCORE_SHORT", "40")
+MARKET_SCORE_LONG = _float("MARKET_SCORE_LONG", "65")
+MARKET_SCORE_SHORT = _float("MARKET_SCORE_SHORT", "35")
 MARKET_SCORE_EMA_FAST = _int("MARKET_SCORE_EMA_FAST", "20")
 MARKET_SCORE_EMA_SLOW = _int("MARKET_SCORE_EMA_SLOW", "50")
 
