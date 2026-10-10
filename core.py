@@ -169,6 +169,8 @@ DOMINANCE_INTERVAL = _int("DOMINANCE_INTERVAL", "300")
 MARKET_SCORE_ENABLED = _bool("MARKET_SCORE_ENABLED", "true")
 MARKET_SCORE_LONG = _float("MARKET_SCORE_LONG", "65")
 MARKET_SCORE_SHORT = _float("MARKET_SCORE_SHORT", "35")
+# حداقل هم‌راستایی مستقل شاخص‌های بازار برای تأیید امتیاز EMA.
+MARKET_SCORE_MIN_ALIGNMENT = _int("MARKET_SCORE_MIN_ALIGNMENT", "3")
 MARKET_SCORE_EMA_FAST = _int("MARKET_SCORE_EMA_FAST", "20")
 MARKET_SCORE_EMA_SLOW = _int("MARKET_SCORE_EMA_SLOW", "50")
 
@@ -2171,27 +2173,31 @@ def detect_signal(rsi_data, volume, flow, btc, market,
 
     flow_dir = flow_direction(flow)
 
-    # ---------------- MARKET (امتیاز EMA یا قانون ۳ از ۵) ----------------
-    # اگر تاریخچهٔ dominance کافی جمع شده باشد، امتیاز ۰–۱۰۰ بازار
-    # (روند EMA20/50 شاخص‌ها) جایگزین قانون نویزی ۳ از ۵ می‌شود:
-    #   LONG  ← امتیاز >= MARKET_SCORE_LONG  (پیش‌فرض ۶۰)
-    #   SHORT ← امتیاز <= MARKET_SCORE_SHORT (پیش‌فرض ۴۰)
+    # ---------------- MARKET CONFLUENCE ----------------
+    # EMA score and the independent 5-indicator alignment must agree.
+    # When score history is unavailable, retain the legacy 3-of-5 rule.
     mscore = market.get("score")
+    min_alignment = max(1, min(5, MARKET_SCORE_MIN_ALIGNMENT))
     if MARKET_SCORE_ENABLED and mscore is not None:
-        market_long_ok = mscore >= MARKET_SCORE_LONG
-        market_short_ok = mscore <= MARKET_SCORE_SHORT
+        market_long_ok = (
+            mscore >= MARKET_SCORE_LONG
+            and market.get("long", 0) >= min_alignment
+        )
+        market_short_ok = (
+            mscore <= MARKET_SCORE_SHORT
+            and market.get("short", 0) >= min_alignment
+        )
     else:
-        market_long_ok = market["long"] >= 3
-        market_short_ok = market["short"] >= 3
+        market_long_ok = market.get("long", 0) >= 3
+        market_short_ok = market.get("short", 0) >= 3
 
     # ---------------- TREND (EMA200 1H) ----------------
-    # LONG خلاف روند نزولی و SHORT خلاف روند صعودی حذف می‌شود.
-    # اگر روند نامشخص باشد (کوین جدید)، سیگنال رد نمی‌شود.
+    # In quality-first mode, missing/unknown trend is not treated as confirmation.
     trend = volume.get("trend") or "UNKNOWN"
     trend_ok_long = trend_ok_short = True
     if REQUIRE_TREND:
-        trend_ok_long = trend != "DOWN"
-        trend_ok_short = trend != "UP"
+        trend_ok_long = trend == "UP"
+        trend_ok_short = trend == "DOWN"
 
     # ---------------- OI / SENTIMENT ----------------
     # پیش‌فرض غیرفعال‌اند تا سیگنال بیش از حد سخت‌گیرانه نشود.
