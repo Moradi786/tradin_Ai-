@@ -50,6 +50,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from openai import AsyncOpenAI
 
+from signal_quality import market_direction_confirmed
+
 # ============================================================
 # LOGGING
 # ============================================================
@@ -2175,21 +2177,15 @@ def detect_signal(rsi_data, volume, flow, btc, market,
 
     # ---------------- MARKET CONFLUENCE ----------------
     # EMA score and the independent 5-indicator alignment must agree.
-    # When score history is unavailable, retain the legacy 3-of-5 rule.
-    mscore = market.get("score")
-    min_alignment = max(1, min(5, MARKET_SCORE_MIN_ALIGNMENT))
-    if MARKET_SCORE_ENABLED and mscore is not None:
-        market_long_ok = (
-            mscore >= MARKET_SCORE_LONG
-            and market.get("long", 0) >= min_alignment
-        )
-        market_short_ok = (
-            mscore <= MARKET_SCORE_SHORT
-            and market.get("short", 0) >= min_alignment
-        )
-    else:
-        market_long_ok = market.get("long", 0) >= 3
-        market_short_ok = market.get("short", 0) >= 3
+    # If score history is missing, the helper preserves the legacy 3-of-5 rule.
+    market_long_ok = market_direction_confirmed(
+        market, "LONG", MARKET_SCORE_ENABLED, MARKET_SCORE_LONG,
+        MARKET_SCORE_SHORT, MARKET_SCORE_MIN_ALIGNMENT,
+    )
+    market_short_ok = market_direction_confirmed(
+        market, "SHORT", MARKET_SCORE_ENABLED, MARKET_SCORE_LONG,
+        MARKET_SCORE_SHORT, MARKET_SCORE_MIN_ALIGNMENT,
+    )
 
     # ---------------- TREND (EMA200 1H) ----------------
     # In quality-first mode, missing/unknown trend is not treated as confirmation.
