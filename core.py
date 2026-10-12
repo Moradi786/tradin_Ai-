@@ -2244,8 +2244,17 @@ def strict_signal_quality(direction: str, rsi_data: dict, volume: dict,
         "rsi_entry_zone": rsi_ok,
     }
     passed = sum(bool(value) for value in groups.values())
+    weights = {
+        "multi_timeframe_trend": 20,
+        "market_structure": 20,
+        "liquidity_sweep": 10,
+        "volume_flow_oi": 20,
+        "btc_and_market": 15,
+        "rsi_entry_zone": 15,
+    }
+    score = sum(weights[name] for name, ok in groups.items() if ok)
     mandatory = trend_ok and structure_ok and volume_ok and btc_ok and market_ok and rsi_ok
-    return {"score": round(passed / 6 * 100), "passed": passed, "total": 6,
+    return {"score": score, "passed": passed, "total": 6,
             "groups": groups, "mandatory": mandatory}
 
 
