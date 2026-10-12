@@ -411,6 +411,20 @@ def lwc_text(lwc: Optional[dict]) -> str:
 def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
                    market, ai, oi=None, fg=None) -> str:
     emoji = "🟢" if direction == "LONG" else "🔴"
+    quality = (volume or {}).get("strict_quality") or {}
+    score_line = (
+        f"🧪 کیفیت سیگنال ┆ <b>{quality.get('score', 0)}/100</b> · "
+        f"تأییدها {quality.get('passed', 0)}/{quality.get('total', 6)}"
+        if STRICT_SIGNAL_MODE else ""
+    )
+    stop = (volume or {}).get("stop_loss")
+    target = (volume or {}).get("take_profit")
+    risk_line = ""
+    if stop is not None and target is not None:
+        risk_line = (
+            f"\\n🛡️ حد ضرر پیشنهادی ┆ <code>{stop:.8g}</code>"
+            f"\\n🎯 هدف پیشنهادی ┆ <code>{target:.8g}</code> · R:R 1:2"
+        )
 
     return f"""
 <b>{emoji} {direction} SIGNAL</b>
@@ -424,6 +438,7 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 🌍 DOM ┆ {market_text(market, direction)}
 🌐 LWC ┆ {lwc_text(lwc)}
 😨 F&G ┆ {fg_text(fg)}
+{score_line}{risk_line}
 {SEP}
 🤖 {ai}
 {SEP}
@@ -565,8 +580,10 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                 btc_pair(symbol),
             )
 
+            strict_analysis = await strict_market_analysis(symbol) if STRICT_SIGNAL_MODE else None
             direction = detect_signal(
-                rsi_data, volume, flow_coin, btc, market, oi, fg
+                rsi_data, volume, flow_coin, btc, market, oi, fg,
+                strict_analysis=strict_analysis,
             )
             if not direction:
                 return
