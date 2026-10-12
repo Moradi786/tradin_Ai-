@@ -173,6 +173,11 @@ MARKET_SCORE_LONG = _float("MARKET_SCORE_LONG", "65")
 MARKET_SCORE_SHORT = _float("MARKET_SCORE_SHORT", "35")
 # حداقل هم‌راستایی مستقل شاخص‌های بازار برای تأیید امتیاز EMA.
 MARKET_SCORE_MIN_ALIGNMENT = _int("MARKET_SCORE_MIN_ALIGNMENT", "3")
+
+STRICT_SIGNAL_MODE = _bool("STRICT_SIGNAL_MODE", "true")
+STRICT_MIN_SCORE = _int("STRICT_MIN_SCORE", "90")
+STRICT_MIN_CONFIRMATIONS = _int("STRICT_MIN_CONFIRMATIONS", "5")
+STRICT_MARKET_MIN_ALIGNMENT = _int("STRICT_MARKET_MIN_ALIGNMENT", "4")
 MARKET_SCORE_EMA_FAST = _int("MARKET_SCORE_EMA_FAST", "20")
 MARKET_SCORE_EMA_SLOW = _int("MARKET_SCORE_EMA_SLOW", "50")
 
@@ -2160,12 +2165,110 @@ def early_watch(volume: Optional[dict], lwc: Optional[dict],
 
 
 # ============================================================
+# STRICT FINAL-SIGNAL CONFIRMATION
+# ============================================================
+
+async def strict_market_analysis(symbol: str) -> dict:
+    """Closed-candle multi-timeframe trend, structure and liquidity sweep."""
+    result = {"trends": {}, "structure": "UNKNOWN", "sweep": "NONE"}
+    try:
+        rows15, rows1h, rows4h = await asyncio.gather(
+            klines(symbol, "15m", 80),
+            klines(symbol, "1h", 80),
+            klines(symbol, "4h", 80),
+        )
+        for label, rows in (("15m", rows15), ("1h", rows1h), ("4h", rows4h)):
+            closes = [num(row[4]) for row in rows[:-1]]
+            avg = ema(closes, 50)
+            if avg is not None and closes:
+                result["trends"][label] = "UP" if closes[-1] > avg else "DOWN" if closes[-1] < avg else "NEUTRAL"
+            else:
+                result["trends"][label] = "UNKNOWN"
+        closed = rows15[:-1]
+        if len(closed) < 22:
+            return result
+        candle, prior = closed[-1], closed[-21:-1]
+        prior_high = max(num(row[2]) for row in prior)
+        prior_low = min(num(row[3]) for row in prior)
+        high, low, close = num(candle[2]), num(candle[3]), num(candle[4])
+        if close > prior_high:
+            result["structure"] = "BULLISH"
+        elif close < prior_low:
+            result["structure"] = "BEARISH"
+        if low < prior_low and close > prior_low:
+            result["sweep"] = "BULLISH"
+        elif high > prior_high and close < prior_high:
+            result["sweep"] = "BEARISH"
+    except Exception as exc:
+        log.warning("STRICT ANALYSIS failed for %s: %s", symbol, exc)
+    return result
+
+
+def strict_signal_quality(direction: str, rsi_data: dict, volume: dict,
+                          flow: dict, btc: dict, market: dict, oi: dict,
+                          structure: dict) -> dict:
+    """Six confirmation groups, score 0..100; missing data never confirms."""
+    trends = (structure or {}).get("trends") or {}
+    expected = "UP" if direction == "LONG" else "DOWN"
+    trend_ok = all(trends.get(tf) == expected for tf in ("15m", "1h", "4h"))
+    expected_dir = "BULLISH" if direction == "LONG" else "BEARISH"
+    structure_ok = (structure or {}).get("structure") == expected_dir
+    sweep_ok = (structure or {}).get("sweep") == expected_dir
+    volume_ok = bool(volume) and num(volume.get("volume_ratio")) >= max(VOLUME_MULTIPLIER, 2.0)
+    flow_ok = flow_direction(flow) == expected_dir
+    buy_ratio = num((volume or {}).get("buy_ratio"), 0.5)
+    flow_ok = flow_ok and (buy_ratio >= 0.55 if direction == "LONG" else buy_ratio <= 0.45)
+    oi_change = (oi or {}).get("change_pct")
+    oi_ok = oi_change is not None and num(oi_change) > 0
+    participation_ok = flow_ok and oi_ok
+    btc_ok = (btc or {}).get("direction") == expected_dir
+    market_count = int((market or {}).get("long" if direction == "LONG" else "short", 0) or 0)
+    market_score = (market or {}).get("score")
+    if direction == "LONG":
+        market_ok = market_count >= STRICT_MARKET_MIN_ALIGNMENT and (market_score is None or num(market_score) >= MARKET_SCORE_LONG)
+    else:
+        market_ok = market_count >= STRICT_MARKET_MIN_ALIGNMENT and (market_score is None or num(market_score) <= MARKET_SCORE_SHORT)
+    vals = [(rsi_data or {}).get(tf) for tf in ("15m", "1h", "4h")]
+    if any(v is None for v in vals):
+        rsi_ok = False
+    elif direction == "LONG":
+        rsi_ok = vals[0] <= LONG_RSI_15M and vals[1] <= LONG_RSI_1H and vals[2] <= LONG_RSI_4H
+    else:
+        rsi_ok = vals[0] >= SHORT_RSI_15M and vals[1] >= SHORT_RSI_1H and vals[2] >= SHORT_RSI_4H
+    groups = {
+        "multi_timeframe_trend": trend_ok,
+        "market_structure": structure_ok,
+        "liquidity_sweep": sweep_ok,
+        "volume_flow_oi": volume_ok and participation_ok,
+        "btc_and_market": btc_ok and market_ok,
+        "rsi_entry_zone": rsi_ok,
+    }
+    passed = sum(bool(value) for value in groups.values())
+    mandatory = trend_ok and structure_ok and volume_ok and btc_ok and market_ok and rsi_ok
+    return {"score": round(passed / 6 * 100), "passed": passed, "total": 6,
+            "groups": groups, "mandatory": mandatory}
+
+
+def apply_atr_risk_levels(direction: str, volume: dict) -> dict:
+    """Suggested ATR levels only; no order is ever submitted."""
+    price = num((volume or {}).get("price"))
+    atr_value = num((volume or {}).get("atr"))
+    if price <= 0 or atr_value <= 0:
+        return {}
+    if direction == "LONG":
+        return {"stop_loss": price - 1.5 * atr_value,
+                "take_profit": price + 3.0 * atr_value, "rr": 2.0}
+    return {"stop_loss": price + 1.5 * atr_value,
+            "take_profit": price - 3.0 * atr_value, "rr": 2.0}
+
+
+# ============================================================
 # FINAL SIGNAL
 # ============================================================
 
 
 def detect_signal(rsi_data, volume, flow, btc, market,
-                  oi=None, fg=None) -> Optional[str]:
+                  oi=None, fg=None, strict_analysis=None) -> Optional[str]:
     if not rsi_data or not volume:
         return None
 
@@ -2221,7 +2324,18 @@ def detect_signal(rsi_data, volume, flow, btc, market,
         oi_ok_long,
         fg_ok_long,
     ]):
-        return "LONG"
+        candidate = "LONG"
+    else:
+        candidate = None
+
+    if candidate == "LONG":
+        if not STRICT_SIGNAL_MODE:
+            return candidate
+        quality = strict_signal_quality(candidate, rsi_data, volume, flow, btc, market, oi, strict_analysis or {})
+        if quality["score"] >= STRICT_MIN_SCORE and quality["passed"] >= STRICT_MIN_CONFIRMATIONS and quality["mandatory"]:
+            volume["strict_quality"] = quality
+            volume.update(apply_atr_risk_levels(candidate, volume))
+            return candidate
 
     # ---------------- SHORT ----------------
     if all([
@@ -2234,6 +2348,17 @@ def detect_signal(rsi_data, volume, flow, btc, market,
         oi_ok_short,
         fg_ok_short,
     ]):
-        return "SHORT"
+        candidate = "SHORT"
+    else:
+        candidate = None
 
-    return None
+    if candidate is None:
+        return None
+    if not STRICT_SIGNAL_MODE:
+        return candidate
+    quality = strict_signal_quality(candidate, rsi_data, volume, flow, btc, market, oi, strict_analysis or {})
+    if quality["score"] < STRICT_MIN_SCORE or quality["passed"] < STRICT_MIN_CONFIRMATIONS or not quality["mandatory"]:
+        return None
+    volume["strict_quality"] = quality
+    volume.update(apply_atr_risk_levels(candidate, volume))
+    return candidate
