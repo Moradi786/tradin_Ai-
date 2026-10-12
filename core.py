@@ -2212,8 +2212,9 @@ def strict_signal_quality(direction: str, rsi_data: dict, volume: dict,
     expected = "UP" if direction == "LONG" else "DOWN"
     trend_ok = all(trends.get(tf) == expected for tf in ("15m", "1h", "4h"))
     expected_dir = "BULLISH" if direction == "LONG" else "BEARISH"
-    structure_ok = (structure or {}).get("structure") == expected_dir
     sweep_ok = (structure or {}).get("sweep") == expected_dir
+    # A valid sweep-and-reclaim is itself a structural response, even without a BOS.
+    structure_ok = (structure or {}).get("structure") == expected_dir or sweep_ok
     volume_ok = bool(volume) and num(volume.get("volume_ratio")) >= max(VOLUME_MULTIPLIER, 2.0)
     flow_ok = flow_direction(flow) == expected_dir
     buy_ratio = num((volume or {}).get("buy_ratio"), 0.5)
