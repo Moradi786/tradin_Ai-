@@ -1996,7 +1996,7 @@ async def get_dominance() -> Optional[dict]:
 # MARKET ALIGNMENT
 # ============================================================
 
-_ALIGNMENT_KEYS = ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL2", "TOTAL3")
+_ALIGNMENT_KEYS = ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL", "TOTAL2", "TOTAL3")
 
 
 def _empty_alignment() -> dict:
@@ -2004,7 +2004,7 @@ def _empty_alignment() -> dict:
     return {
         "long": 0,
         "short": 0,
-        "total": 5,
+        "total": 6,
         "score": None,
         "long_details": dict(empty),
         "short_details": dict(empty),
@@ -2019,6 +2019,7 @@ def market_alignment(current: Optional[dict], previous: Optional[dict]) -> dict:
         "BTC.D": current["BTC.D"] < previous["BTC.D"],
         "USDT.D": current["USDT.D"] < previous["USDT.D"],
         "OTHERS.D": current["OTHERS.D"] > previous["OTHERS.D"],
+        "TOTAL": current["TOTAL"] > previous["TOTAL"],
         "TOTAL2": current["TOTAL2"] > previous["TOTAL2"],
         "TOTAL3": current["TOTAL3"] > previous["TOTAL3"],
     }
