@@ -323,7 +323,7 @@ def market_text(market: dict, direction: str) -> str:
         if score is not None else ""
     )
     return (
-        f"{ltr(row)} · هم‌راستایی <b>{count}/5</b>"
+        f"{ltr(row)} · هم‌راستایی <b>{count}/6</b>"
         f"{score_line}"
     )
 
