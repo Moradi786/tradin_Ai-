@@ -422,8 +422,8 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
     risk_line = ""
     if stop is not None and target is not None:
         risk_line = (
-            f"\\n🛡️ حد ضرر پیشنهادی ┆ <code>{stop:.8g}</code>"
-            f"\\n🎯 هدف پیشنهادی ┆ <code>{target:.8g}</code> · R:R 1:2"
+            f"\n🛡️ حد ضرر پیشنهادی ┆ <code>{stop:.8g}</code>"
+            f"\n🎯 هدف پیشنهادی ┆ <code>{target:.8g}</code> · R:R 1:2"
         )
 
     return f"""
@@ -541,6 +541,27 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                              symbol, rot["rel_btc"])
                     await tracker.record_signal(
                         "ROT", symbol, rot["direction"],
+                        volume.get("price"),
+                    )
+
+            # ==========================
+            # BTC DUMP ROTATION (سیگنال ششم)
+            # ==========================
+            dump = premove.detect_btc_dump(symbol, volume, flow_coin, oi,
+                                           market)
+            if dump:
+                key = f"DUMP:{symbol}"
+                if can_send(key):
+                    await telegram(
+                        premove.btcdump_message(
+                            dump, symbol, volume, flow_coin, oi,
+                            flow_text, oi_text,
+                        )
+                    )
+                    log.info("BTC-DUMP ROTATION: %s (rel %+.2f%%)",
+                             symbol, dump["rel_btc"])
+                    await tracker.record_signal(
+                        "DUMP", symbol, dump["direction"],
                         volume.get("price"),
                     )
 
@@ -787,7 +808,7 @@ async def startup_diagnostics() -> None:
     log.info("COINMARKETCAP_API_KEY: %s",
              "set (last-resort fallback)" if COINMARKETCAP_API_KEY
              else "not set (not needed)")
-    log.info("DOMINANCE SOURCE: CoinGecko -> Coinpaprika%s",
+    log.info("DOMINANCE SOURCE: CoinGecko -> Coinpaprika -> CoinLore%s",
              " -> CoinMarketCap" if COINMARKETCAP_API_KEY else "")
     log.info("DOMINANCE_INTERVAL: %ds | SCAN_INTERVAL: %ds",
              DOMINANCE_INTERVAL, SCAN_INTERVAL)
@@ -853,7 +874,7 @@ async def health():
         "binance": True,
         "livecoinwatch": bool(LIVECOINWATCH_API_KEY),
         "money_flow": "binance-futures-taker",
-        "dominance": "coingecko -> coinpaprika",
+        "dominance": "coingecko -> coinpaprika -> coinlore",
         "open_interest": "binance-futures",
         "sentiment": "alternative.me",
         "coinmarketcap": bool(COINMARKETCAP_API_KEY),
