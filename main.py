@@ -173,7 +173,7 @@ AI_PROMPT_TEMPLATE = """
 4. CryptoMeter چه چیزی نشان می‌دهد؟
 5. RSI در 15m / 1h / 4h چه می‌گوید؟
 6. BTC Pair صعودی یا نزولی است؟
-7. BTC.D / USDT.D / OTHERS.D / TOTAL2 / TOTAL3
+7. BTC.D / USDT.D / OTHERS.D / TOTAL / TOTAL2 / TOTAL3
    چقدر با جهت سیگنال هماهنگ هستند؟
 8. آیا این حرکت early است یا حرکت شروع شده؟
 9. تناقض یا ریسک اصلی چیست؟
@@ -315,7 +315,7 @@ def market_text(market: dict, direction: str) -> str:
 
     row = " ".join(
         f"{check(details[k])}{k}" for k in
-        ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL2", "TOTAL3")
+        ("BTC.D", "USDT.D", "OTHERS.D", "TOTAL", "TOTAL2", "TOTAL3")
     )
     score = market.get("score")
     score_line = (
