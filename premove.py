@@ -17,6 +17,11 @@
   BTC.D نزولی + آلت از BTC قوی‌تر + OI صعودی + ورود پول
   + حجم رشد کرده ولی قیمت هنوز نپریده.
 
+سیگنال ششم: BTC DUMP ROTATION (چرخش هنگام ریزش بیت)
+  وقتی BTC نزولی و BTC.D هم نزولی است (پول از بیت خارج و
+  وارد آلت‌ها می‌شود)، کوین‌هایی که پیر ALT/BTC شان صعودی
+  است هشدار داده می‌شوند.
+
 این ماژول توسط main.py ایمپورت می‌شود. منطق داده در core.py است.
 """
 
@@ -72,6 +77,24 @@ ROTATION_ENABLED = os.getenv("ROTATION_ENABLED", "true").strip().lower() in (
 
 # حداقل برتری تغییر ۲۴ ساعتهٔ آلت نسبت به BTC (٪).
 ROTATION_REL_MIN = _float("ROTATION_REL_MIN", "0.5")
+
+# ------------------------------------------------------------
+# BTC DUMP ROTATION (سیگنال ششم: ریزش BTC + ریزش BTC.D)
+# ------------------------------------------------------------
+
+# با BTCDUMP_ENABLED=false غیرفعال می‌شود.
+BTCDUMP_ENABLED = os.getenv("BTCDUMP_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes",
+)
+
+# تغییر ۲۴ ساعتهٔ BTC باید حداکثر اینقدر باشد (٪) — یعنی بیت نزولی.
+BTCDUMP_BTC_MAX = _float("BTCDUMP_BTC_MAX", "-0.5")
+
+# حداقل برتری آلت نسبت به BTC (٪) — یعنی پیر ALT/BTC صعودی.
+BTCDUMP_REL_MIN = _float("BTCDUMP_REL_MIN", "1.0")
+
+# حداقل نسبت حجم برای تأیید توجه بازار به آلت.
+BTCDUMP_VOLUME_MIN = _float("BTCDUMP_VOLUME_MIN", "1.3")
 
 
 # ============================================================
@@ -152,6 +175,14 @@ def detect_premove(symbol: str, volume: Optional[dict],
         # جهت نامشخص = هشدار PRE-MOVE بدون جهت معتبر نیست.
         return None
 
+    # --- فیلتر روند EMA200: سیگنال خلاف روند حذف می‌شود ---
+    trend = volume.get("trend")
+    if core.REQUIRE_TREND and trend:
+        if direction == "BULLISH" and trend == "DOWN":
+            return None
+        if direction == "BEARISH" and trend == "UP":
+            return None
+
     return {
         "direction": direction,
         "score": score,
@@ -174,6 +205,10 @@ def detect_rotation(symbol: str, volume: Optional[dict],
       5. حجم رشد کرده ولی قیمت هنوز نپریده
     """
     if not ROTATION_ENABLED or not volume or not market:
+        return None
+
+    # فیلتر روند: ROTATION صعودی است؛ روند نزولی = بدون سیگنال.
+    if core.REQUIRE_TREND and volume.get("trend") == "DOWN":
         return None
 
     # ۵) حجم رشد کرده ولی قیمت هنوز حرکت نکرده
@@ -211,6 +246,66 @@ def detect_rotation(symbol: str, volume: Optional[dict],
     return {"direction": "BULLISH", "rel_btc": rel}
 
 
+def detect_btc_dump(symbol: str, volume: Optional[dict],
+                    flow: Optional[dict], oi: Optional[dict],
+                    market: Optional[dict]) -> Optional[dict]:
+    """
+    سیگنال ششم: BTC DUMP ROTATION.
+
+    سناریو: BTC نزولی است و BTC.D هم نزولی — یعنی پول همزمان
+    از بیت خارج و وارد آلت‌ها می‌شود (تسلط بیت در حال ریزش).
+    کوین‌هایی که پیر ALT/BTC شان صعودی باشد هشدار می‌گیرند.
+
+    شرط‌ها:
+      1. BTC.D نزولی (از market_alignment)
+      2. تغییر ۲۴ ساعتهٔ BTC <= BTCDUMP_BTC_MAX (بیت نزولی)
+      3. برتری آلت نسبت به BTC >= BTCDUMP_REL_MIN (پیر صعودی)
+      4. حجم آلت >= BTCDUMP_VOLUME_MIN (توجه واقعی بازار)
+      5. اگر دادهٔ flow هست، netflow منفی نباشد
+
+    همهٔ داده‌ها از کش/ورودی scan_symbol می‌آید؛ درخواست جدیدی
+    به صرافی زده نمی‌شود (rate-limit).
+    """
+    if not BTCDUMP_ENABLED or not volume or not market:
+        return None
+
+    # فیلتر روند: هشدار صعودی است؛ روند نزولی = بدون سیگنال.
+    if core.REQUIRE_TREND and volume.get("trend") == "DOWN":
+        return None
+
+    # ۱) BTC.D نزولی (پول از بیت خارج می‌شود)
+    if not market.get("long_details", {}).get("BTC.D"):
+        return None
+
+    # ۲ و ۳) از کش tickers — BTC نزولی و پیر ALT/BTC صعودی
+    tickers = core.tickers_cache.get("data") or {}
+    alt, btc = tickers.get(symbol), tickers.get("BTCUSDT")
+    if not alt or not btc:
+        return None
+    btc_change = num(btc.get("priceChangePercent"))
+    if btc_change > BTCDUMP_BTC_MAX:
+        return None
+    rel = num(alt.get("priceChangePercent")) - btc_change
+    if rel < BTCDUMP_REL_MIN:
+        return None
+
+    # ۴) حجم آلت رشد کرده باشد
+    if volume["volume_ratio"] < BTCDUMP_VOLUME_MIN:
+        return None
+
+    # ۵) جریان پول نباید خروجی سنگین باشد
+    if flow:
+        total = num(flow.get("inflow")) + num(flow.get("outflow"))
+        if total > 0 and num(flow.get("netflow")) / total < -PREMOVE_FLOW_RATIO:
+            return None
+
+    return {
+        "direction": "BULLISH",
+        "rel_btc": rel,
+        "btc_change": btc_change,
+    }
+
+
 # ============================================================
 # MESSAGE
 # ============================================================
@@ -242,6 +337,26 @@ def rotation_message(result: dict, symbol: str, volume: dict,
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")}
 {SEP}
 🔥 ترکیب طلایی کامل شد؛ قیمت هنوز حرکت نکرده.
+{FOOTER}
+"""
+
+
+def btcdump_message(result: dict, symbol: str, volume: dict,
+                    flow: Optional[dict], oi: Optional[dict],
+                    flow_text_fn, oi_text_fn) -> str:
+    return f"""
+<b>🩸 BTC DUMP ROTATION</b>
+🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
+🟢 جهت: <b>صعودی</b> (برتری به بیت)
+{SEP}
+📉 BTC ┆ {ltr(f"{result['btc_change']:+.2f}%")} نزولی
+📉 BTC.D ┆ نزولی (پول از بیت به آلت می‌چرخد)
+💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> قوی‌تر از بیت
+📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")}
+📦 OI ┆ {oi_text_fn(oi)}
+💰 FLOW ┆ {flow_text_fn(flow)}
+{SEP}
+🩸 بیت می‌ریزد و تسلطش هم کم می‌شود؛ پول وارد این کوین شده.
 {FOOTER}
 """
 
