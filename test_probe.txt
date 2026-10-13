@@ -1,4 +1,0 @@
-"""
-BTC DUMP ROTATION detector — standalone test harness.
-"""
-print("ok")
