@@ -13,7 +13,7 @@
   - **Money Flow** از دادهٔ رایگان taker بایننس (یا CryptoMeter پولی)
   - **Open Interest** (ورود/خروج پول جدید)
   - **BTC Pair** (قدرت نسبی آلت در برابر بیت‌کوین)
-  - **Dominance** (BTC.D / USDT.D / OTHERS.D / TOTAL2 / TOTAL3) از CoinGecko/Coinpaprika — رایگان
+  - **Market/Dominance** (TOTAL / TOTAL2 / TOTAL3 + BTC.D / ETH.D / USDT.D / OTHERS.D) از CoinGecko و منابع جایگزین — رایگان
   - **Fear & Greed Index** از alternative.me
 - **EARLY WATCH**: هشدار ورود حجم قبل از حرکت بزرگ قیمت
 - **⚪ WEAKENING**: هشدار تضعیف حرکت برای خروج به‌موقع (پایین مراجعه به بخش «انواع سیگنال»)
