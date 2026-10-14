@@ -158,7 +158,7 @@ def detect_premove(symbol: str, volume: Optional[dict],
         previous = rsi(closes[:-PREMOVE_RSI_LOOKBACK])
         if current is not None and previous is not None:
             rsi_data = {"current": current, "previous": previous}
-            checks["rsi"] = current > previous
+            checks["rsi"] = abs(current - previous) >= 1.0
 
     score = sum(checks.values())
     if score < PREMOVE_MIN_SCORE:
