@@ -64,7 +64,7 @@ PREMOVE_FLOW_RATIO = _float("PREMOVE_FLOW_RATIO", "0.05")
 PREMOVE_RSI_LOOKBACK = int(os.getenv("PREMOVE_RSI_LOOKBACK", "3"))
 
 # حداقل امتیاز لازم از ۴ نشانه.
-PREMOVE_MIN_SCORE = int(os.getenv("PREMOVE_MIN_SCORE", "3"))
+PREMOVE_MIN_SCORE = int(os.getenv("PREMOVE_MIN_SCORE", "4"))
 
 # ------------------------------------------------------------
 # GOLDEN ROTATION (ترکیب طلایی: چرخش پول از BTC به آلت)
@@ -137,7 +137,8 @@ def detect_premove(symbol: str, volume: Optional[dict],
     )
 
     # ۲) OI صعودی = ورود پول جدید به پوزیشن‌ها
-    checks["oi"] = bool(oi and oi["change_pct"] >= PREMOVE_OI_MIN)
+    checks["oi"] = bool(oi and oi.get("change_pct") is not None
+                        and oi["change_pct"] >= max(PREMOVE_OI_MIN, 0.5))
 
     # ۳) جریان پول یک‌طرفه
     flow_ratio_ok = False
@@ -167,12 +168,14 @@ def detect_premove(symbol: str, volume: Optional[dict],
     netflow = num(flow.get("netflow")) if flow else 0.0
     buy_ratio = volume.get("buy_ratio", 0.5)
 
-    if netflow > 0 and buy_ratio >= 0.52:
+    if not rsi_data or not checks["oi"] or not checks["flow"]:
+        return None
+    if netflow > 0 and buy_ratio >= 0.55 and rsi_data["current"] > rsi_data["previous"]:
         direction = "BULLISH"
-    elif netflow < 0 and buy_ratio <= 0.48:
+    elif netflow < 0 and buy_ratio <= 0.45 and rsi_data["current"] < rsi_data["previous"]:
         direction = "BEARISH"
     else:
-        # جهت نامشخص = هشدار PRE-MOVE بدون جهت معتبر نیست.
+        # پول، نسبت خرید و مومنتوم باید هم‌جهت باشند.
         return None
 
     # --- فیلتر روند EMA200: سیگنال خلاف روند حذف می‌شود ---
