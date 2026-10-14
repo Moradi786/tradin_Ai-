@@ -2141,29 +2141,37 @@ def flow_direction(flow: Optional[dict]) -> str:
 
 
 def early_watch(volume: Optional[dict], lwc: Optional[dict],
-                flow: Optional[dict]) -> bool:
+                flow: Optional[dict], oi: Optional[dict] = None) -> bool:
+    """Strict early warning: require aligned trend, volume, flow and OI."""
     if not volume:
         return False
-    if volume["volume_ratio"] < EARLY_VOLUME_RATIO:
+    if volume.get("volume_ratio", 0) < max(EARLY_VOLUME_RATIO, 1.8):
         return False
-    if abs(volume["price_move"]) > MAX_PRICE_MOVE:
+    if abs(volume.get("price_move", 0)) > min(MAX_PRICE_MOVE, 1.0):
         return False
-
-    flow_ok = False
-    if flow:
-        total = num(flow.get("inflow")) + num(flow.get("outflow"))
-        if total:
-            ratio = abs(num(flow.get("netflow"))) / total
-            flow_ok = ratio >= flow_threshold(flow, EARLY_FLOW_RATIO)
-
-    # سخت‌گیرانه: ورود پول واقعی لازم است؛ فقط داشتن دادهٔ LWC
-    # کافی نیست (همین باعث سیل سیگنال‌های ضعیف EARLY می‌شد).
-    # اگر دادهٔ FLOW اصلاً نباشد (همهٔ منابع down)، با حجم
-    # خیلی بالاتر (به‌اندازهٔ سیگنال نهایی) جایگزین می‌کنیم.
-    if flow:
-        return flow_ok
-    return bool(lwc) and volume["volume_ratio"] >= VOLUME_MULTIPLIER
-
+    if REQUIRE_TREND and volume.get("trend") not in ("UP", "DOWN"):
+        return False
+    if not oi or num(oi.get("change_pct")) < 0.5:
+        return False
+    if not flow:
+        return False
+    total = num(flow.get("inflow")) + num(flow.get("outflow"))
+    if total <= 0:
+        return False
+    ratio = num(flow.get("netflow")) / total
+    if abs(ratio) < max(flow_threshold(flow, EARLY_FLOW_RATIO), 0.08):
+        return False
+    buy_ratio = num(volume.get("buy_ratio"), 0.5)
+    if ratio > 0 and buy_ratio < 0.55:
+        return False
+    if ratio < 0 and buy_ratio > 0.45:
+        return False
+    if REQUIRE_TREND:
+        if ratio > 0 and volume["trend"] != "UP":
+            return False
+        if ratio < 0 and volume["trend"] != "DOWN":
+            return False
+    return True
 
 # ============================================================
 # STRICT FINAL-SIGNAL CONFIRMATION
