@@ -488,7 +488,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # ==========================
             # EARLY WATCH
             # ==========================
-            if early_watch(volume, lwc_coin, flow_coin):
+            if early_watch(volume, lwc_coin, flow_coin, oi):
                 key = f"EARLY:{symbol}"
                 if can_send_cooldown(key, EARLY_COOLDOWN):
                     await telegram(
