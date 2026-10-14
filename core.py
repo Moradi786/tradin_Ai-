@@ -2023,12 +2023,20 @@ def market_alignment(current: Optional[dict], previous: Optional[dict]) -> dict:
         "TOTAL2": current["TOTAL2"] > previous["TOTAL2"],
         "TOTAL3": current["TOTAL3"] > previous["TOTAL3"],
     }
-    short_details = {k: not v for k, v in long_details.items()}
+    # A flat/unchanged metric confirms neither direction.
+    short_details = {
+        "BTC.D": current["BTC.D"] > previous["BTC.D"],
+        "USDT.D": current["USDT.D"] > previous["USDT.D"],
+        "OTHERS.D": current["OTHERS.D"] < previous["OTHERS.D"],
+        "TOTAL": current["TOTAL"] < previous["TOTAL"],
+        "TOTAL2": current["TOTAL2"] < previous["TOTAL2"],
+        "TOTAL3": current["TOTAL3"] < previous["TOTAL3"],
+    }
 
     return {
         "long": sum(long_details.values()),
         "short": sum(short_details.values()),
-        "total": 5,
+        "total": 6,
         # امتیاز EMA بازار (اگر تاریخچه کافی جمع شده باشد).
         "score": current.get("SCORE"),
         "long_details": long_details,
