@@ -85,24 +85,32 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
 
     rsi_data = {"current": current, "previous": previous}
 
-    # تأییدیه‌ها: بستن پوزیشن‌ها یا برگشت جریان پول
-    oi_falling = bool(oi and oi["change_pct"] < 0)
-    flow_not_bullish = core.flow_direction(flow) != "BULLISH"
-    flow_not_bearish = core.flow_direction(flow) != "BEARISH"
+    # دادهٔ OI و FLOW هر دو باید موجود و تأییدکننده باشند.
+    if not oi or oi.get("change_pct") is None or not flow:
+        return None
+    oi_falling = num(oi.get("change_pct")) < 0
+    flow_dir = core.flow_direction(flow)
+    trend = await core.trend_direction(symbol)
+    if core.REQUIRE_TREND and trend == "UNKNOWN":
+        return None
 
-    # حرکت صعودی در حال مردن
+    # حرکت صعودی در حال تضعیف: افت RSI همراه کاهش OI و تضعیف خرید.
     if (
         previous >= WEAKENING_RSI_HIGH
         and current <= previous - WEAKENING_RSI_DROP
-        and (oi_falling or flow_not_bullish)
+        and oi_falling
+        and flow_dir in ("BEARISH", "NEUTRAL")
+        and (not core.REQUIRE_TREND or trend == "UP")
     ):
         return {"direction": "UP", "rsi": rsi_data}
 
-    # حرکت نزولی در حال مردن
+    # حرکت نزولی در حال تضعیف: برگشت RSI همراه کاهش OI و تضعیف فروش.
     if (
         previous <= WEAKENING_RSI_LOW
         and current >= previous + WEAKENING_RSI_DROP
-        and (oi_falling or flow_not_bearish)
+        and oi_falling
+        and flow_dir in ("BULLISH", "NEUTRAL")
+        and (not core.REQUIRE_TREND or trend == "DOWN")
     ):
         return {"direction": "DOWN", "rsi": rsi_data}
 
