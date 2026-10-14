@@ -296,11 +296,14 @@ def detect_btc_dump(symbol: str, volume: Optional[dict],
     if volume["volume_ratio"] < BTCDUMP_VOLUME_MIN:
         return None
 
-    # ۵) جریان پول نباید خروجی سنگین باشد
-    if flow:
-        total = num(flow.get("inflow")) + num(flow.get("outflow"))
-        if total > 0 and num(flow.get("netflow")) / total < -PREMOVE_FLOW_RATIO:
-            return None
+    # جریان پول و OI هر دو باید موجود باشند؛ دادهٔ ناقص تأیید نیست.
+    if not oi or oi.get("change_pct") is None or oi["change_pct"] < max(PREMOVE_OI_MIN, 0.5):
+        return None
+    if not flow:
+        return None
+    total = num(flow.get("inflow")) + num(flow.get("outflow"))
+    if total <= 0 or num(flow.get("netflow")) / total < max(PREMOVE_FLOW_RATIO, 0.05):
+        return None
 
     return {
         "direction": "BULLISH",
