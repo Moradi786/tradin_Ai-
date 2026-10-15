@@ -291,7 +291,12 @@ def detect_btc_dump(symbol: str, volume: Optional[dict],
     btc_change = num(btc.get("priceChangePercent"))
     if btc_change > BTCDUMP_BTC_MAX:
         return None
-    rel = num(alt.get("priceChangePercent")) - btc_change
+    alt_change = num(alt.get("priceChangePercent"))
+    # محاسبهٔ بازده واقعی جفت ALT/BTC، نه صرفاً تفریق دو درصد.
+    btc_factor = 1.0 + btc_change / 100.0
+    if btc_factor <= 0:
+        return None
+    rel = ((1.0 + alt_change / 100.0) / btc_factor - 1.0) * 100.0
     if rel < BTCDUMP_REL_MIN:
         return None
 
