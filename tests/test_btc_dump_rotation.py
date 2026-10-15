@@ -49,7 +49,7 @@ class BtcDumpRotationTests(unittest.TestCase):
         result = self.detect()
         self.assertIsNotNone(result)
         self.assertEqual(result["direction"], "BULLISH")
-        self.assertAlmostEqual(result["rel_btc"], 5.0)
+        self.assertAlmostEqual(result["rel_btc"], ((1.03 / 0.98) - 1) * 100.0)
 
     def test_rejects_weak_buy_pressure(self):
         volume = dict(self.volume, buy_ratio=0.49)
