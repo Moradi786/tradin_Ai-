@@ -272,8 +272,11 @@ def detect_btc_dump(symbol: str, volume: Optional[dict],
     if not BTCDUMP_ENABLED or not volume or not market:
         return None
 
-    # فیلتر روند: هشدار صعودی است؛ روند نزولی = بدون سیگنال.
-    if core.REQUIRE_TREND and volume.get("trend") == "DOWN":
+    # هشدار صعودی است؛ فقط روند صعودیِ تأییدشده پذیرفته می‌شود.
+    if core.REQUIRE_TREND and volume.get("trend") != "UP":
+        return None
+    # قدرت جفت ALT/BTC باید با فشار خرید خود آلت هم سازگار باشد.
+    if num(volume.get("buy_ratio"), 0.5) < 0.55:
         return None
 
     # ۱) BTC.D نزولی (پول از بیت خارج می‌شود)
