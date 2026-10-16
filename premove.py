@@ -75,8 +75,11 @@ ROTATION_ENABLED = os.getenv("ROTATION_ENABLED", "true").strip().lower() in (
     "1", "true", "yes",
 )
 
-# حداقل برتری تغییر ۲۴ ساعتهٔ آلت نسبت به BTC (٪).
+# حداقل/حداکثر برتری ۲۴ ساعتهٔ آلت نسبت به BTC (٪).
 ROTATION_REL_MIN = _float("ROTATION_REL_MIN", "0.5")
+# ضد تعقیب قیمت: از کوینی که جهش بزرگی کرده دیر وارد نشو.
+ROTATION_REL_MAX = _float("ROTATION_REL_MAX", "8.0")
+ROTATION_ALT_MAX_24H = _float("ROTATION_ALT_MAX_24H", "8.0")
 
 # ------------------------------------------------------------
 # BTC DUMP ROTATION (سیگنال ششم: ریزش BTC + ریزش BTC.D)
@@ -210,8 +213,10 @@ def detect_rotation(symbol: str, volume: Optional[dict],
     if not ROTATION_ENABLED or not volume or not market:
         return None
 
-    # فیلتر روند: ROTATION صعودی است؛ روند نزولی = بدون سیگنال.
-    if core.REQUIRE_TREND and volume.get("trend") == "DOWN":
+    # فرصت زودهنگام فقط با روند صعودی تأییدشده.
+    if core.REQUIRE_TREND and volume.get("trend") != "UP":
+        return None
+    if num(volume.get("buy_ratio"), 0.5) < 0.55:
         return None
 
     # ۵) حجم رشد کرده ولی قیمت هنوز حرکت نکرده
@@ -229,10 +234,13 @@ def detect_rotation(symbol: str, volume: Optional[dict],
     alt, btc = tickers.get(symbol), tickers.get("BTCUSDT")
     if not alt or not btc:
         return None
-    rel = num(alt.get("priceChangePercent")) - num(
-        btc.get("priceChangePercent")
-    )
-    if rel < ROTATION_REL_MIN:
+    alt_change = num(alt.get("priceChangePercent"))
+    btc_change = num(btc.get("priceChangePercent"))
+    rel = alt_change - btc_change
+    # جلوگیری از هشدار پس از جهش بزرگ.
+    if rel < ROTATION_REL_MIN or rel > ROTATION_REL_MAX:
+        return None
+    if alt_change > ROTATION_ALT_MAX_24H:
         return None
 
     # ۳) OI صعودی
@@ -297,7 +305,9 @@ def detect_btc_dump(symbol: str, volume: Optional[dict],
     if btc_factor <= 0:
         return None
     rel = ((1.0 + alt_change / 100.0) / btc_factor - 1.0) * 100.0
-    if rel < BTCDUMP_REL_MIN:
+    if rel < BTCDUMP_REL_MIN or rel > BTCDUMP_REL_MAX:
+        return None
+    if alt_change > BTCDUMP_ALT_MAX_24H:
         return None
 
     # ۴) حجم آلت رشد کرده باشد
