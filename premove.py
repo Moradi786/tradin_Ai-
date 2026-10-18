@@ -98,6 +98,13 @@ BTCDUMP_REL_MIN = _float("BTCDUMP_REL_MIN", "1.0")
 
 # حداقل نسبت حجم برای تأیید توجه بازار به آلت.
 BTCDUMP_VOLUME_MIN = _float("BTCDUMP_VOLUME_MIN", "1.3")
+BTCDUMP_REL_MAX = _float("BTCDUMP_REL_MAX", "12.0")
+BTCDUMP_ALT_MAX_24H = _float("BTCDUMP_ALT_MAX_24H", "12.0")
+
+# Conservative 15m pre-move filter: price must be near a recent range edge.
+PREMOVE_LEVEL_LOOKBACK = int(os.getenv("PREMOVE_LEVEL_LOOKBACK", "12"))
+PREMOVE_LEVEL_DISTANCE_PCT = _float("PREMOVE_LEVEL_DISTANCE_PCT", "1.0")
+PREMOVE_VOLUME_MAX = _float("PREMOVE_VOLUME_MAX", "2.5")
 
 
 # ============================================================
@@ -126,8 +133,10 @@ def detect_premove(symbol: str, volume: Optional[dict],
 
     closes = volume.get("closes") or []
 
-    # --- شرط صفر: قیمت هنوز حرکت نکرده باشد ---
-    if abs(volume.get("price_move", 0)) > PREMOVE_MAX_PRICE_MOVE:
+    # Conservative mode: reject candles already expanding or chasing a volume spike.
+    if abs(num(volume.get("price_move"))) > PREMOVE_MAX_PRICE_MOVE:
+        return None
+    if num(volume.get("volume_ratio")) > PREMOVE_VOLUME_MAX:
         return None
 
     checks = {}
@@ -181,15 +190,38 @@ def detect_premove(symbol: str, volume: Optional[dict],
         # پول، نسبت خرید و مومنتوم باید هم‌جهت باشند.
         return None
 
-    # --- فیلتر روند EMA200: سیگنال خلاف روند حذف می‌شود ---
+    # --- فیلتر روند EMA200: حالت محافظه‌کار فقط هم‌جهت روند ---
     trend = volume.get("trend")
-    if core.REQUIRE_TREND and trend:
-        if direction == "BULLISH" and trend == "DOWN":
+    if core.REQUIRE_TREND:
+        if direction == "BULLISH" and trend != "UP":
             return None
-        if direction == "BEARISH" and trend == "UP":
+        if direction == "BEARISH" and trend != "DOWN":
+            return None
+
+    # --- نقطهٔ آماده‌سازی: نزدیک سقف/کف ۱۲ کندل قبلی، قبل از شکست ---
+    highs = volume.get("highs") or []
+    lows = volume.get("lows") or []
+    lookback = max(3, PREMOVE_LEVEL_LOOKBACK)
+    if len(highs) < lookback or len(lows) < lookback:
+        return None
+    recent_high = max(num(x) for x in highs[-lookback:])
+    recent_low = min(num(x) for x in lows[-lookback:])
+    price = num(volume.get("price"))
+    if price <= 0 or recent_high <= 0 or recent_low <= 0:
+        return None
+    if direction == "BULLISH":
+        distance_pct = (recent_high - price) / price * 100
+        if price >= recent_high or distance_pct > PREMOVE_LEVEL_DISTANCE_PCT:
+            return None
+    else:
+        distance_pct = (price - recent_low) / price * 100
+        if price <= recent_low or distance_pct > PREMOVE_LEVEL_DISTANCE_PCT:
             return None
 
     return {
+        "setup": "NEAR_BREAKOUT" if direction == "BULLISH" else "NEAR_BREAKDOWN",
+        "level": recent_high if direction == "BULLISH" else recent_low,
+        "distance_pct": distance_pct,
         "direction": direction,
         "score": score,
         "checks": checks,
