@@ -95,3 +95,8 @@ python main.py
 - اگر `REQUIRE_TREND` فعال است، روند کوین باید صعودی باشد.
 
 تنظیمات در `.env.example` آمده است. این فیلترها هشدارها را محدود می‌کنند، اما سود را تضمین نمی‌کنند.
+
+
+### Conservative 15m pre-move scanner
+
+The PRE-MOVE signal now requires a closed 15m candle with controlled price movement and volume, aligned flow/OI/RSI direction, trend alignment when enabled, and price within the configured distance of the prior 12-candle high (LONG) or low (SHORT). It rejects setups that are too far from the range edge or already have an expanded volume candle. Configure with `PREMOVE_LEVEL_LOOKBACK`, `PREMOVE_LEVEL_DISTANCE_PCT`, and `PREMOVE_VOLUME_MAX`. These are candidate setups, not guaranteed breakouts.
