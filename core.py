@@ -1355,8 +1355,8 @@ async def volume_analysis(symbol: str) -> Optional[dict]:
         # کندل‌های بسته‌شده برای WEAKENING تا دوباره klines نگیرد.
         "closes": [num(x[4]) for x in data[:-1]],
         # Candle extremes from the same closed 15m data; no extra exchange request.
-        "highs": [num(x[2]) for x in data[:-1]],
-        "lows": [num(x[3]) for x in data[:-1]],
+        "highs": [num(x[2]) for x in data[:-2]],
+        "lows": [num(x[3]) for x in data[:-2]],
         "volume": current_volume,
         "quote_volume": current_quote_volume,
         "average_volume": avg_volume,
