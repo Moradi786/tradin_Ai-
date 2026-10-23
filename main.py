@@ -27,6 +27,7 @@ import premove
 import telemenu
 import tracker
 import weakening
+import breakout
 from core import *  # noqa: F401,F403  (پیکربندی، دیتا، منطق سیگنال)
 
 # مرجع به تسک‌های پس‌زمینه تا از garbage collection جلوگیری شود.
@@ -484,6 +485,30 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                 money_flow(symbol),
                 binance_open_interest(symbol),
             )
+
+            # ==========================
+            # SUPPORT / RESISTANCE EARLY WARNING + BREAKOUT
+            # ==========================
+            # هشدار نزدیک سطح، سپس تأیید شکست با بسته‌شدن کندل 15m
+            level_signal = await breakout.analyze(symbol, volume)
+            if level_signal:
+                kind = level_signal["kind"]
+                direction = level_signal.get("direction", "")
+                if kind == "WATCH":
+                    key = f"LEVEL-WATCH:{symbol}:{level_signal['level_type']}"
+                    cooldown = breakout.LEVEL_WATCH_COOLDOWN
+                    message = breakout.watch_message(symbol, level_signal, volume)
+                else:
+                    key = f"BREAKOUT:{direction}:{symbol}"
+                    cooldown = breakout.BREAKOUT_COOLDOWN
+                    message = breakout.breakout_message(symbol, level_signal, volume, flow_coin, oi)
+                if can_send_cooldown(key, cooldown):
+                    await telegram(message)
+                    log.info("%s: %s %s", kind, symbol, direction or level_signal.get("level_type", ""))
+                    await tracker.record_signal(
+                        "LEVEL_WATCH" if kind == "WATCH" else "BREAKOUT",
+                        symbol, direction, volume.get("price"),
+                    )
 
             # ==========================
             # EARLY WATCH
