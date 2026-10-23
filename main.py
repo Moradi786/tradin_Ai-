@@ -494,7 +494,11 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             if level_signal:
                 kind = level_signal["kind"]
                 direction = level_signal.get("direction", "")
-                if kind == "WATCH":
+                if kind == "EARLY":
+                    key = f"LEVEL-EARLY:{direction}:{symbol}"
+                    cooldown = breakout.LEVEL_WATCH_COOLDOWN
+                    message = breakout.early_signal_message(symbol, level_signal)
+                elif kind == "WATCH":
                     key = f"LEVEL-WATCH:{symbol}:{level_signal['level_type']}"
                     cooldown = breakout.LEVEL_WATCH_COOLDOWN
                     message = breakout.watch_message(symbol, level_signal, volume)
