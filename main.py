@@ -453,10 +453,21 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 
 def early_message(symbol, volume, lwc, flow, oi=None, fg=None, btc=None) -> str:
     lwc = lwc or {}
+    flow_dir = core.flow_direction(flow)
+    direction_fa = {
+        "BULLISH": "صعودی",
+        "BEARISH": "نزولی",
+        "NEUTRAL": "خنثی",
+    }.get(flow_dir, "نامشخص")
+    emoji = "🟢" if flow_dir == "BULLISH" else "🔴" if flow_dir == "BEARISH" else "🟡"
+    trend_fa = {"UP": "صعودی", "DOWN": "نزولی"}.get(
+        (volume or {}).get("trend"), "نامشخص"
+    )
     return f"""
 <b>🟡 EARLY WATCH</b>
 {coin_line(symbol, volume)}
-حجم و پول وارد شده؛ قیمت هنوز حرکت نکرده.
+{emoji} جهت اولیه: <b>{direction_fa}</b> · روند EMA: <b>{trend_fa}</b>
+قیمت هنوز حرکت بزرگی نکرده؛ این هشدار به معنی ورود قطعی پول نیست.
 {SEP}
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
 📊 حجم ۲۴ ساعته ┆ <b>{ltr(f"{fmt_big(volume.get('volume_24h_btc', 0))} BTC")}</b>
@@ -466,7 +477,7 @@ def early_message(symbol, volume, lwc, flow, oi=None, fg=None, btc=None) -> str:
 🌐 LWC ┆ {lwc_text(lwc)}
 😨 F&G ┆ {fg_text(fg)}
 {SEP}
-🟡 هنوز سیگنال نهایی نیست. {FOOTER}
+🟡 هشدار اولیه است؛ منتظر تأیید قیمت و بازار بمان. {FOOTER}
 """
 
 
@@ -607,7 +618,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     )
 
             # ==========================
-            # WEAKENING (سیگنال سوم)
+            # WEAKENING (سیگنال هفتم)
             # ==========================
             # مستقل از آستانهٔ حجم چک می‌شود؛ تضعیف حرکت
             # معمولاً با خشک شدن حجم همراه است.
