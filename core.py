@@ -949,6 +949,7 @@ async def coinlore_tickers() -> dict:
         result[symbol] = {
             "symbol": symbol,
             "quoteVolume": str(num(item.get("volume24"))),
+            "lastPrice": str(num(item.get("price_usd"))),
             "priceChangePercent": num(item.get("percent_change_24h")),
         }
     return result
