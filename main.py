@@ -437,6 +437,7 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 💰 FLOW ┆ {flow_text(flow)}
 ₿ BTC ┆ {btc_text(btc)}
 🌍 DOM ┆ {market_text(market, direction)}
+📊 حجم ۲۴ ساعته ┆ <b>{ltr(f"{fmt_big(volume.get('volume_24h_btc', 0))} BTC")}</b>
 🌐 LWC ┆ {lwc_text(lwc)}
 😨 F&G ┆ {fg_text(fg)}
 {score_line}{risk_line}
@@ -455,6 +456,7 @@ def early_message(symbol, volume, lwc, flow, oi=None, fg=None) -> str:
 حجم و پول وارد شده؛ قیمت هنوز حرکت نکرده.
 {SEP}
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
+📊 حجم ۲۴ ساعته ┆ <b>{ltr(f"{fmt_big(volume.get('volume_24h_btc', 0))} BTC")}</b>
 📦 OI ┆ {oi_text(oi)}
 💰 FLOW ┆ {flow_text(flow)}
 🌐 LWC ┆ {lwc_text(lwc)}
@@ -472,13 +474,17 @@ scan_semaphore = asyncio.Semaphore(SCAN_CONCURRENCY)
 
 
 async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
-                      market: dict, fg: Optional[dict]) -> None:
+                      market: dict, fg: Optional[dict],
+                      quote_volume_24h: float = 0.0,
+                      btc_price: float = 0.0) -> None:
     """تحلیل یک نماد: early watch، سیگنال نهایی و weakening."""
     async with scan_semaphore:
         try:
             volume = await volume_analysis(symbol)
             if not volume:
                 return
+            # مقدار quoteVolume همان تیکر 24h را به BTC تبدیل کن تا در همه پیام‌ها نمایش داده شود.
+            volume["volume_24h_btc"] = (quote_volume_24h / btc_price) if btc_price > 0 else 0.0
 
             # ورود/خروج پول و تغییر OI همین نماد (همزمان)
             flow_coin, oi = await asyncio.gather(
@@ -756,8 +762,8 @@ async def scan() -> None:
     # COIN SCAN (همزمان با محدودیت)
     # ------------------------------
     await asyncio.gather(
-        *(scan_symbol(symbol, lwc_coin, market, fg)
-          for symbol, _, lwc_coin in candidates)
+        *(scan_symbol(symbol, lwc_coin, market, fg, quote_volume, btc_price)
+          for symbol, quote_volume, lwc_coin in candidates)
     )
 
     # پاک‌سازی دوره‌ای کش‌های per-symbol
