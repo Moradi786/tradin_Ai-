@@ -486,6 +486,7 @@ async def bybit_tickers() -> dict:
             result[symbol] = {
                 "symbol": symbol,
                 "quoteVolume": item.get("turnover24h") or "0",
+                "lastPrice": item.get("lastPrice") or "0",
                 # Bybit درصد را به‌صورت نسبت می‌دهد (0.0123 = 1.23٪)
                 "priceChangePercent": num(item.get("price24hPcnt")) * 100,
             }
@@ -609,6 +610,7 @@ async def okx_tickers() -> dict:
         result[symbol] = {
             "symbol": symbol,
             "quoteVolume": str(quote_volume),
+            "lastPrice": str(last),
             "priceChangePercent": change,
         }
     return result
@@ -732,6 +734,7 @@ async def kucoin_tickers() -> dict:
         result[symbol] = {
             "symbol": symbol,
             "quoteVolume": str(num(item.get("turnover"))),
+            "lastPrice": item.get("price") or item.get("lastTradePrice") or "0",
             # KuCoin درصد را به‌صورت نسبت می‌دهد (0.0123 = 1.23٪)
             "priceChangePercent": num(item.get("priceChgPct")) * 100,
         }
@@ -802,6 +805,7 @@ async def bitget_tickers() -> dict:
             result[symbol] = {
                 "symbol": symbol,
                 "quoteVolume": item.get("quoteVolume") or "0",
+                "lastPrice": item.get("lastPr") or "0",
                 # Bitget درصد را به‌صورت نسبت می‌دهد
                 "priceChangePercent": num(item.get("change24h")) * 100,
             }
@@ -922,6 +926,7 @@ async def coincap_tickers() -> dict:
         result[symbol] = {
             "symbol": symbol,
             "quoteVolume": str(num(item.get("volumeUsd24Hr"))),
+            "lastPrice": str(num(item.get("priceUsd"))),
             "priceChangePercent": num(item.get("changePercent24Hr")),
         }
     return result
