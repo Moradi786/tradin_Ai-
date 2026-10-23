@@ -438,7 +438,7 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
 📦 OI ┆ {oi_text(oi)}
 💰 FLOW ┆ {flow_text(flow)}
-₿ BTC ┆ {btc_text(btc)}
+📉 {btc_text(btc)}
 🌍 DOM ┆ {market_text(market, direction)}
 📊 حجم ۲۴ ساعته ┆ <b>{ltr(f"{fmt_big(volume.get('volume_24h_btc', 0))} BTC")}</b>
 🌐 LWC ┆ {lwc_text(lwc)}
