@@ -705,7 +705,7 @@ async def scan() -> None:
             continue
 
         quote_volume = num(ticker.get("quoteVolume"))
-        if quote_volume < min_quote_volume:
+        if quote_volume <= min_quote_volume:
             continue
 
         base = symbol.replace("USDT", "")
