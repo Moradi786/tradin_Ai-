@@ -19,10 +19,10 @@ def _num(value, default=0.0):
 
 
 async def analyze(symbol, volume):
-    """Prefer an early directional signal near the level; breakout is secondary."""
+    """Use 4h support/resistance for early directional signals; breakout is secondary."""
     from core import klines
 
-    rows = await klines(symbol, "15m", LEVEL_LOOKBACK + 5)
+    rows = await klines(symbol, "4h", LEVEL_LOOKBACK + 5)
     if not rows or len(rows) < LEVEL_LOOKBACK + 2:
         return None
 
@@ -85,7 +85,6 @@ def early_signal_message(symbol, signal):
 🧱 مقاومت: <code>{signal['resistance']:.8g}</code>
 📏 فاصله تا {level_fa}: <b>{signal['distance_pct']:.2f}%</b>
 📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
-📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 🛒 نسبت خرید: <b>{signal['buy_ratio'] * 100:.1f}%</b>
 {SEP}
@@ -122,10 +121,10 @@ def breakout_message(symbol, signal, volume, flow=None, oi=None):
 🪙 <b>#{symbol}</b>
 💵 قیمت فعلی: <code>{signal['price']:.8g}</code>
 🧱 سطح شکسته‌شده ({level}): <code>{broken_level:.8g}</code>
-🕯️ بسته‌شدن کندل 15m: <code>{signal['close']:.8g}</code>
+🕯️ بسته‌شدن کندل 4h: <code>{signal['close']:.8g}</code>
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 🛒 نسبت خرید: <b>{signal['buy_ratio'] * 100:.1f}%</b>
 {SEP}
-کندل 15 دقیقه‌ای بیرون سطح بسته شده است.
+کندل ۴ ساعته بیرون سطح بسته شده است.
 ⚠️ شکست کاذب ممکن است.
 """
