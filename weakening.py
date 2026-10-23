@@ -55,10 +55,11 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
     اگر حرکت در حال مردن باشد دیکشنری برمی‌گرداند:
       {
         "direction": "UP" | "DOWN",
-        "rsi": {"current": float, "previous": float}
+        "rsi": {"current": float, "previous": float},
+        "price_confirmation": bool
       }
-      UP   → حرکت صعودی در حال تضعیف (ریسک ریزش)
-      DOWN → حرکت نزولی در حال تضعیف (ریسک پمپ/برگشت)
+      UP   → حرکت صعودی در حال تضعیف (ریسک افت)
+      DOWN → حرکت نزولی در حال تضعیف (احتمال برگشت صعودی)
     در غیر این صورت None.
 
     اگر closes (کندل‌های بستهٔ 15m از volume_analysis) داده شود،
@@ -84,6 +85,15 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
         return None
 
     rsi_data = {"current": current, "previous": previous}
+    # تأیید ساختار قیمت جدا از تضعیف مومنتوم سنجیده می‌شود؛
+    # نبود آن سیگنال را حذف نمی‌کند، اما در پیام هشدار داده می‌شود.
+    recent = [num(x) for x in closes[-4:]]
+    price_confirmation_up = (
+        len(recent) >= 4 and recent[-1] > max(recent[:-1])
+    )
+    price_confirmation_down = (
+        len(recent) >= 4 and recent[-1] < min(recent[:-1])
+    )
 
     # دادهٔ OI و FLOW هر دو باید موجود و تأییدکننده باشند.
     if not oi or oi.get("change_pct") is None or not flow:
@@ -102,7 +112,11 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
         and flow_dir in ("BEARISH", "NEUTRAL")
         and (not core.REQUIRE_TREND or trend == "UP")
     ):
-        return {"direction": "UP", "rsi": rsi_data}
+        return {
+            "direction": "UP",
+            "rsi": rsi_data,
+            "price_confirmation": price_confirmation_down,
+        }
 
     # حرکت نزولی در حال تضعیف: برگشت RSI همراه کاهش OI و تضعیف فروش.
     if (
@@ -112,7 +126,11 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
         and flow_dir in ("BULLISH", "NEUTRAL")
         and (not core.REQUIRE_TREND or trend == "DOWN")
     ):
-        return {"direction": "DOWN", "rsi": rsi_data}
+        return {
+            "direction": "DOWN",
+            "rsi": rsi_data,
+            "price_confirmation": price_confirmation_up,
+        }
 
     return None
 
@@ -139,23 +157,23 @@ def weakening_message(result: dict, symbol: str,
     rsi_data = result["rsi"]
 
     if result["direction"] == "UP":
-        title = "⏳ حرکت صعودی در حال تضعیف است"
-        hint = (
-            f"{ltr('LONG')} داری ← <b>سود را بگیر</b>"
-            " · نداری ← <b>وارد نشو</b>"
-        )
+        title = "⏳ مومنتوم صعودی در حال تضعیف است"
+        hint = "اگر پوزیشن LONG داری، ریسک را دوباره ارزیابی کن؛ این پیام دستور فروش نیست."
     else:
-        title = "⏳ حرکت نزولی در حال تضعیف است"
-        hint = (
-            f"{ltr('SHORT')} داری ← <b>سود را بگیر</b>"
-            " · نداری ← <b>وارد نشو</b>"
-        )
+        title = "⏳ مومنتوم نزولی در حال تضعیف است"
+        hint = "اگر پوزیشن SHORT داری، ریسک را دوباره ارزیابی کن؛ این پیام دستور خرید نیست."
 
     rsi_line = ltr(
         f"{rsi_data['previous']:.1f} → {rsi_data['current']:.1f}"
         f" ({rsi_data['current'] - rsi_data['previous']:+.1f})"
     )
 
+    price_confirmed = bool(result.get("price_confirmation"))
+    confirmation_line = (
+        "✅ ساختار قیمت: حرکت اخیر تأییدکنندهٔ ضعف است"
+        if price_confirmed
+        else "⚠️ ساختار قیمت: هنوز تأیید نشده؛ فقط مومنتوم ضعیف شده"
+    )
     return f"""
 <b>⚪ WEAKENING</b>
 🪙 <b>#{ltr(symbol)}</b>
@@ -165,7 +183,9 @@ def weakening_message(result: dict, symbol: str,
 📉 RSI ┆ {rsi_line}
 📦 OI ┆ {oi_text_fn(oi)}
 💰 FLOW ┆ {flow_text_fn(flow)}
+{confirmation_line}
 {SEP}
 💡 {hint}
+⚠️ تضعیف مومنتوم به‌تنهایی برگشت قیمت را ثابت نمی‌کند.
 {FOOTER}
 """
