@@ -372,6 +372,7 @@ def detect_btc_dump(symbol: str, volume: Optional[dict],
         "direction": "BULLISH",
         "rel_btc": rel,
         "btc_change": btc_change,
+        "alt_change": alt_change,
     }
 
 
@@ -425,7 +426,7 @@ def btcdump_message(result: dict, symbol: str, volume: dict,
 📉 BTC/USDT ┆ {ltr(f"{result['btc_change']:+.2f}%")} در ۲۴ ساعت
 📉 BTC.D ┆ نزولی · USDT.D صعودی نیست
 💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> عملکرد بهتر در ۲۴ ساعت
-📊 ALT/USDT ┆ <b>{ltr(f"{num(core.tickers_cache.get('data', {}).get(symbol, {}).get('priceChangePercent')):+.2f}%")}</b> تغییر ۲۴ ساعته
+📊 ALT/USDT ┆ <b>{ltr(f"{result.get('alt_change', 0):+.2f}%")}</b> تغییر ۲۴ ساعته
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")}
 📦 OI ┆ {oi_text_fn(oi)}
 💰 FLOW ┆ {flow_text_fn(flow)}
