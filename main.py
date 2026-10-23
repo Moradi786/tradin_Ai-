@@ -388,15 +388,18 @@ def fg_text(fg: Optional[dict]) -> str:
 
 
 def btc_text(btc: dict) -> str:
-    dir_emoji = {
-        "BULLISH": "🟢",
-        "BEARISH": "🔴",
-    }.get(btc["direction"], "⚪")
-
-    change = btc["change"] if btc["change"] is not None else 0
+    direction = btc.get("direction", "UNKNOWN")
+    dir_emoji, direction_fa = {
+        "BULLISH": ("🟢", "صعودی"),
+        "BEARISH": ("🔴", "نزولی"),
+        "NEUTRAL": ("🟡", "خنثی"),
+        "UNKNOWN": ("⚪", "نامشخص"),
+    }.get(direction, ("⚪", "نامشخص"))
+    change = btc.get("change")
+    change_text = f" ({change:+.2f}%)" if change is not None else ""
     return (
-        f"{ltr(btc['pair'])} {dir_emoji} <b>{ltr(btc['direction'])}</b>"
-        f" {ltr(f'({change:+.2f}%)')}"
+        f"روند کوین نسبت به BTC ┆ {ltr(btc.get('pair', 'ALT/BTC'))} "
+        f"{dir_emoji} <b>{direction_fa}</b>{ltr(change_text)}"
     )
 
 
@@ -435,7 +438,7 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
 📦 OI ┆ {oi_text(oi)}
 💰 FLOW ┆ {flow_text(flow)}
-₿ BTC ┆ {btc_text(btc)}
+📉 {btc_text(btc)}
 🌍 DOM ┆ {market_text(market, direction)}
 📊 حجم ۲۴ ساعته ┆ <b>{ltr(f"{fmt_big(volume.get('volume_24h_btc', 0))} BTC")}</b>
 🌐 LWC ┆ {lwc_text(lwc)}
@@ -448,7 +451,7 @@ def signal_message(direction, symbol, rsi_data, volume, lwc, flow, btc,
 """
 
 
-def early_message(symbol, volume, lwc, flow, oi=None, fg=None) -> str:
+def early_message(symbol, volume, lwc, flow, oi=None, fg=None, btc=None) -> str:
     lwc = lwc or {}
     return f"""
 <b>🟡 EARLY WATCH</b>
@@ -457,6 +460,7 @@ def early_message(symbol, volume, lwc, flow, oi=None, fg=None) -> str:
 {SEP}
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
 📊 حجم ۲۴ ساعته ┆ <b>{ltr(f"{fmt_big(volume.get('volume_24h_btc', 0))} BTC")}</b>
+₿ {btc_text(btc or {"pair": symbol.replace("USDT", "") + "/BTC", "direction": "UNKNOWN", "change": None})}
 📦 OI ┆ {oi_text(oi)}
 💰 FLOW ┆ {flow_text(flow)}
 🌐 LWC ┆ {lwc_text(lwc)}
@@ -487,9 +491,10 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             volume["volume_24h_btc"] = (quote_volume_24h / btc_price) if btc_price > 0 else 0.0
 
             # ورود/خروج پول و تغییر OI همین نماد (همزمان)
-            flow_coin, oi = await asyncio.gather(
+            flow_coin, oi, btc = await asyncio.gather(
                 money_flow(symbol),
                 binance_open_interest(symbol),
+                btc_pair(symbol),
             )
 
             # ==========================
@@ -504,15 +509,15 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                 if kind == "EARLY":
                     key = f"LEVEL-EARLY:{direction}:{symbol}"
                     cooldown = breakout.LEVEL_WATCH_COOLDOWN
-                    message = breakout.early_signal_message(symbol, level_signal)
+                    message = breakout.early_signal_message(symbol, level_signal, btc_text(btc))
                 elif kind == "WATCH":
                     key = f"LEVEL-WATCH:{symbol}:{level_signal['level_type']}"
                     cooldown = breakout.LEVEL_WATCH_COOLDOWN
-                    message = breakout.watch_message(symbol, level_signal, volume)
+                    message = breakout.watch_message(symbol, level_signal, volume, btc_text(btc))
                 else:
                     key = f"BREAKOUT:{direction}:{symbol}"
                     cooldown = breakout.BREAKOUT_COOLDOWN
-                    message = breakout.breakout_message(symbol, level_signal, volume, flow_coin, oi)
+                    message = breakout.breakout_message(symbol, level_signal, volume, flow_coin, oi, btc_text(btc))
                 if can_send_cooldown(key, cooldown):
                     await telegram(message)
                     log.info("%s: %s %s", kind, symbol, direction or level_signal.get("level_type", ""))
@@ -530,7 +535,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     await telegram(
                         early_message(
                             symbol, volume, lwc_coin or {},
-                            flow_coin or {}, oi, fg,
+                            flow_coin or {}, oi, fg, btc,
                         )
                     )
                     log.info("EARLY WATCH: %s", symbol)
@@ -550,7 +555,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     await telegram(
                         premove.premove_message(
                             pre, symbol, volume, flow_coin, oi,
-                            flow_text, oi_text,
+                            flow_text, oi_text, btc_text(btc),
                         )
                     )
                     log.info("PRE-MOVE: %s %s", pre["direction"], symbol)
@@ -570,7 +575,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     await telegram(
                         premove.rotation_message(
                             rot, symbol, volume, flow_coin, oi,
-                            flow_text, oi_text,
+                            flow_text, oi_text, btc_text(btc),
                         )
                     )
                     log.info("ROTATION: %s (rel %+.2f%%)",
@@ -591,7 +596,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     await telegram(
                         premove.btcdump_message(
                             dump, symbol, volume, flow_coin, oi,
-                            flow_text, oi_text,
+                            flow_text, oi_text, btc_text(btc),
                         )
                     )
                     log.info("BTC-DUMP ROTATION: %s (rel %+.2f%%)",
@@ -617,7 +622,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     await telegram(
                         weakening.weakening_message(
                             weak, symbol, flow_coin, oi,
-                            flow_text, oi_text,
+                            flow_text, oi_text, btc_text(btc),
                         )
                     )
                     log.info("WEAKENING: %s %s", weak["direction"], symbol)
@@ -632,10 +637,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             if volume["volume_ratio"] < VOLUME_MULTIPLIER:
                 return
 
-            rsi_data, btc = await asyncio.gather(
-                all_rsi(symbol),
-                btc_pair(symbol),
-            )
+            rsi_data = await all_rsi(symbol)
 
             strict_analysis = await strict_market_analysis(symbol) if STRICT_SIGNAL_MODE else None
             direction = detect_signal(

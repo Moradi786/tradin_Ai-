@@ -135,7 +135,7 @@ def ltr(text) -> str:
 
 def weakening_message(result: dict, symbol: str,
                       flow: Optional[dict], oi: Optional[dict],
-                      flow_text_fn, oi_text_fn) -> str:
+                      flow_text_fn, oi_text_fn, btc_line="") -> str:
     rsi_data = result["rsi"]
 
     if result["direction"] == "UP":
@@ -159,6 +159,7 @@ def weakening_message(result: dict, symbol: str,
     return f"""
 <b>⚪ WEAKENING</b>
 🪙 <b>#{ltr(symbol)}</b>
+{btc_line}
 {title}
 {SEP}
 📉 RSI ┆ {rsi_line}
