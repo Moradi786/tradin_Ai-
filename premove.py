@@ -5,7 +5,7 @@
 هدف: کوین‌هایی که هنوز حرکت نکرده‌اند اما نشانه‌های تجمیع دارند
 را زودتر از حرکت اصلی پیدا کند.
 
-چهار نشانهٔ تجمیع (امتیازی — حداقل ۳ از ۴ لازم است):
+چهار نشانهٔ تجمیع (امتیازی — حداقل ۳ از ۴ لازم است؛ مقدار پیش‌فرض ۳):
   1. حجم در حال رشد است (ولی هنوز انفجار نکرده)
   2. OI صعودی = پول جدید وارد پوزیشن‌ها می‌شود
   3. جریان پول (taker flow) یک‌طرفه شده
@@ -64,7 +64,7 @@ PREMOVE_FLOW_RATIO = _float("PREMOVE_FLOW_RATIO", "0.05")
 PREMOVE_RSI_LOOKBACK = int(os.getenv("PREMOVE_RSI_LOOKBACK", "3"))
 
 # حداقل امتیاز لازم از ۴ نشانه.
-PREMOVE_MIN_SCORE = int(os.getenv("PREMOVE_MIN_SCORE", "4"))
+PREMOVE_MIN_SCORE = max(1, min(4, int(os.getenv("PREMOVE_MIN_SCORE", "3"))))
 
 # ------------------------------------------------------------
 # GOLDEN ROTATION (ترکیب طلایی: چرخش پول از BTC به آلت)
@@ -167,7 +167,7 @@ def detect_premove(symbol: str, volume: Optional[dict],
     checks["rsi"] = False
     if len(closes) >= 30:
         current = rsi(closes)
-        previous = rsi(closes[:-PREMOVE_RSI_LOOKBACK])
+        previous = rsi(closes[:-max(1, PREMOVE_RSI_LOOKBACK)])
         if current is not None and previous is not None:
             rsi_data = {"current": current, "previous": previous}
             checks["rsi"] = abs(current - previous) >= 1.0
@@ -257,19 +257,25 @@ def detect_rotation(symbol: str, volume: Optional[dict],
     if abs(volume.get("price_move", 0)) > PREMOVE_MAX_PRICE_MOVE:
         return None
 
-    # ۱) BTC.D نزولی (پول از بیت خارج می‌شود)
-    if not market.get("long_details", {}).get("BTC.D"):
+    # ۱) BTC.D نزولی و USDT.D رو به افزایش نباشد؛ افزایش USDT.D
+    # معمولاً با فرار سرمایه به استیبل‌کوین‌ها سازگارتر است.
+    details = market.get("long_details", {})
+    short_details = market.get("short_details", {})
+    if not details.get("BTC.D") or short_details.get("USDT.D"):
         return None
 
-    # ۲) آلت از BTC قوی‌تر (از کش tickers؛ بدون درخواست جدید)
+    # ۲) عملکرد واقعی جفت ALT/BTC از کش تیکرها (بدون درخواست اضافه).
     tickers = core.tickers_cache.get("data") or {}
     alt, btc = tickers.get(symbol), tickers.get("BTCUSDT")
     if not alt or not btc:
         return None
     alt_change = num(alt.get("priceChangePercent"))
     btc_change = num(btc.get("priceChangePercent"))
-    rel = alt_change - btc_change
-    # جلوگیری از هشدار پس از جهش بزرگ.
+    btc_factor = 1.0 + btc_change / 100.0
+    if btc_factor <= 0:
+        return None
+    rel = ((1.0 + alt_change / 100.0) / btc_factor - 1.0) * 100.0
+    # جلوگیری از هشدار پس از جهش بزرگ؛ عملکرد نسبی با بازده واقعی محاسبه می‌شود.
     if rel < ROTATION_REL_MIN or rel > ROTATION_REL_MAX:
         return None
     if alt_change > ROTATION_ALT_MAX_24H:
@@ -286,7 +292,12 @@ def detect_rotation(symbol: str, volume: Optional[dict],
     if total <= 0 or num(flow.get("netflow")) / total < PREMOVE_FLOW_RATIO:
         return None
 
-    return {"direction": "BULLISH", "rel_btc": rel}
+    return {
+        "direction": "BULLISH",
+        "rel_btc": rel,
+        "alt_change": alt_change,
+        "btc_change": btc_change,
+    }
 
 
 def detect_btc_dump(symbol: str, volume: Optional[dict],
@@ -319,8 +330,10 @@ def detect_btc_dump(symbol: str, volume: Optional[dict],
     if num(volume.get("buy_ratio"), 0.5) < 0.55:
         return None
 
-    # ۱) BTC.D نزولی (پول از بیت خارج می‌شود)
-    if not market.get("long_details", {}).get("BTC.D"):
+    # ۱) BTC.D نزولی باشد و USDT.D نشانهٔ واضح صعود نداشته باشد.
+    details = market.get("long_details", {})
+    short_details = market.get("short_details", {})
+    if not details.get("BTC.D") or short_details.get("USDT.D"):
         return None
 
     # ۲ و ۳) از کش tickers — BTC نزولی و پیر ALT/BTC صعودی
@@ -385,15 +398,17 @@ def rotation_message(result: dict, symbol: str, volume: dict,
 <b>🔥 GOLDEN ROTATION</b>
 🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
 {btc_line}
-💱 پول از BTC به این کوین می‌چرخد
+💱 نشانه‌های چرخش احتمالی به سمت این آلت (تأیید قطعی جریان سرمایه نیست)
 {SEP}
-📉 BTC.D ┆ نزولی (خروج پول از بیت)
-💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> قوی‌تر از بیت
+📉 BTC.D ┆ نزولی · USDT.D صعودی نیست
+💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> عملکرد بهتر در ۲۴ ساعت
+📊 ALT/USDT ┆ <b>{ltr(f"{result.get('alt_change', 0):+.2f}%")}</b> تغییر ۲۴ ساعته
+📉 BTC/USDT ┆ <b>{ltr(f"{result.get('btc_change', 0):+.2f}%")}</b> تغییر ۲۴ ساعته
 📦 OI ┆ {oi_text_fn(oi)}
 💰 FLOW ┆ {flow_text_fn(flow)}
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")}
 {SEP}
-🔥 ترکیب طلایی کامل شد؛ قیمت هنوز حرکت نکرده.
+🟡 شرایط نسبی چرخش دیده شده؛ قبل از ورود، تأیید قیمت را بررسی کن.
 {FOOTER}
 """
 
@@ -405,16 +420,17 @@ def btcdump_message(result: dict, symbol: str, volume: dict,
 <b>🩸 BTC DUMP ROTATION</b>
 🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
 {btc_line}
-🟢 جهت: <b>صعودی</b> (برتری به بیت)
+🟢 جهت نسبی: <b>آلت از BTC قوی‌تر است</b>؛ صعود مطلق تضمین نیست
 {SEP}
-📉 BTC ┆ {ltr(f"{result['btc_change']:+.2f}%")} نزولی
-📉 BTC.D ┆ نزولی (پول از بیت به آلت می‌چرخد)
-💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> قوی‌تر از بیت
+📉 BTC/USDT ┆ {ltr(f"{result['btc_change']:+.2f}%")} در ۲۴ ساعت
+📉 BTC.D ┆ نزولی · USDT.D صعودی نیست
+💪 ALT/BTC ┆ <b>{ltr(f"{result['rel_btc']:+.2f}%")}</b> عملکرد بهتر در ۲۴ ساعت
+📊 ALT/USDT ┆ <b>{ltr(f"{num(core.tickers_cache.get('data', {}).get(symbol, {}).get('priceChangePercent')):+.2f}%")}</b> تغییر ۲۴ ساعته
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")}
 📦 OI ┆ {oi_text_fn(oi)}
 💰 FLOW ┆ {flow_text_fn(flow)}
 {SEP}
-🩸 بیت می‌ریزد و تسلطش هم کم می‌شود؛ پول وارد این کوین شده.
+🟡 آلت نسبت به بیت مقاوم‌تر است؛ با این حال ممکن است در برابر USDT هم افت کند.
 {FOOTER}
 """
 
@@ -448,17 +464,24 @@ def premove_message(result: dict, symbol: str, volume: dict,
             )
         )
 
+    setup = "نزدیک شکست مقاومت" if result.get("direction") == "BULLISH" else "نزدیک شکست حمایت"
+    level = result.get("level")
+    level_line = (
+        f"🧱 سطح کلیدی ┆ <code>{level:.8g}</code> · فاصله <b>{result.get('distance_pct', 0):.2f}%</b>"
+        if level is not None else ""
+    )
     return f"""
 <b>🔥 PRE-MOVE</b>
 🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
 {btc_line}
-{dir_line}
+{dir_line} · <b>{setup}</b>
 {SEP}
 🧪 نشانه‌ها ┆ {marks} <b>({result['score']}/4)</b>
 📈 VOL ┆ {ltr(f"{volume['volume_ratio']:.2f}x · {volume['price_move']:+.2f}%")} · خرید <b>{ltr(f"{volume['buy_ratio'] * 100:.1f}%")}</b>
+{level_line}
 📦 OI ┆ {oi_text_fn(oi)}
 💰 FLOW ┆ {flow_text_fn(flow)}{rsi_line}
 {SEP}
-🔥 قیمت هنوز حرکت نکرده؛ نشانه‌های ورود پول دیده می‌شود.
+🟡 نشانه‌های احتمالی پیش از حرکت دیده شده؛ هنوز شکست یا برگشت قیمت تأیید نشده است.
 {FOOTER}
 """
