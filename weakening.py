@@ -79,7 +79,7 @@ async def detect_weakening(symbol: str, flow: Optional[dict],
         return None
 
     current = rsi(closes)
-    previous = rsi(closes[:-WEAKENING_RSI_LOOKBACK])
+    previous = rsi(closes[:-max(1, WEAKENING_RSI_LOOKBACK)])
 
     if current is None or previous is None:
         return None
