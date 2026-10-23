@@ -71,7 +71,7 @@ async def analyze(symbol, volume):
     return None
 
 
-def early_signal_message(symbol, signal):
+def early_signal_message(symbol, signal, btc_line=""):
     direction = signal["direction"]
     is_long = direction == "LONG"
     emoji = "🟢" if is_long else "🔴"
@@ -85,6 +85,7 @@ def early_signal_message(symbol, signal):
 🧱 مقاومت: <code>{signal['resistance']:.8g}</code>
 📏 فاصله تا {level_fa}: <b>{signal['distance_pct']:.2f}%</b>
 📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
+{btc_line}
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 🛒 نسبت خرید: <b>{signal['buy_ratio'] * 100:.1f}%</b>
 {SEP}
@@ -93,7 +94,7 @@ def early_signal_message(symbol, signal):
 """
 
 
-def watch_message(symbol, signal, volume):
+def watch_message(symbol, signal, volume, btc_line=""):
     level = signal["level_type"]
     level_fa = "حمایت" if level == "SUPPORT" else "مقاومت"
     return f"""
@@ -104,6 +105,7 @@ def watch_message(symbol, signal, volume):
 🧱 مقاومت: <code>{signal['resistance']:.8g}</code>
 📏 فاصله تا {level_fa}: <b>{signal['distance_pct']:.2f}%</b>
 📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
+{btc_line}
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 {SEP}
 هشدار نزدیک سطح؛ جهت قطعی نیست.
@@ -111,7 +113,7 @@ def watch_message(symbol, signal, volume):
 """
 
 
-def breakout_message(symbol, signal, volume, flow=None, oi=None):
+def breakout_message(symbol, signal, volume, flow=None, oi=None, btc_line=""):
     direction = signal["direction"]
     emoji = "🟢" if direction == "LONG" else "🔴"
     level = "مقاومت" if direction == "LONG" else "حمایت"
@@ -122,6 +124,7 @@ def breakout_message(symbol, signal, volume, flow=None, oi=None):
 💵 قیمت فعلی: <code>{signal['price']:.8g}</code>
 🧱 سطح شکسته‌شده ({level}): <code>{broken_level:.8g}</code>
 🕯️ بسته‌شدن کندل 4h: <code>{signal['close']:.8g}</code>
+{btc_line}
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 🛒 نسبت خرید: <b>{signal['buy_ratio'] * 100:.1f}%</b>
 {SEP}
