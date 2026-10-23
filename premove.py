@@ -380,10 +380,11 @@ def ltr(text) -> str:
 
 def rotation_message(result: dict, symbol: str, volume: dict,
                      flow: Optional[dict], oi: Optional[dict],
-                     flow_text_fn, oi_text_fn) -> str:
+                     flow_text_fn, oi_text_fn, btc_line="") -> str:
     return f"""
 <b>🔥 GOLDEN ROTATION</b>
 🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
+{btc_line}
 💱 پول از BTC به این کوین می‌چرخد
 {SEP}
 📉 BTC.D ┆ نزولی (خروج پول از بیت)
@@ -399,10 +400,11 @@ def rotation_message(result: dict, symbol: str, volume: dict,
 
 def btcdump_message(result: dict, symbol: str, volume: dict,
                     flow: Optional[dict], oi: Optional[dict],
-                    flow_text_fn, oi_text_fn) -> str:
+                    flow_text_fn, oi_text_fn, btc_line="") -> str:
     return f"""
 <b>🩸 BTC DUMP ROTATION</b>
 🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
+{btc_line}
 🟢 جهت: <b>صعودی</b> (برتری به بیت)
 {SEP}
 📉 BTC ┆ {ltr(f"{result['btc_change']:+.2f}%")} نزولی
@@ -419,7 +421,7 @@ def btcdump_message(result: dict, symbol: str, volume: dict,
 
 def premove_message(result: dict, symbol: str, volume: dict,
                     flow: Optional[dict], oi: Optional[dict],
-                    flow_text_fn, oi_text_fn) -> str:
+                    flow_text_fn, oi_text_fn, btc_line="") -> str:
     checks = result["checks"]
     rsi_data = result.get("rsi")
 
@@ -449,6 +451,7 @@ def premove_message(result: dict, symbol: str, volume: dict,
     return f"""
 <b>🔥 PRE-MOVE</b>
 🪙 <b>#{ltr(symbol)}</b> ┆ 💵 <code>{volume['price']:,.8g}</code>
+{btc_line}
 {dir_line}
 {SEP}
 🧪 نشانه‌ها ┆ {marks} <b>({result['score']}/4)</b>
