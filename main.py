@@ -498,6 +498,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # هشدار نزدیک سطح، سپس تأیید شکست با بسته‌شدن کندل 15m
             level_signal = await breakout.analyze(symbol, volume)
             if level_signal:
+                level_signal["volume_24h_btc"] = volume.get("volume_24h_btc", 0.0)
                 kind = level_signal["kind"]
                 direction = level_signal.get("direction", "")
                 if kind == "EARLY":
