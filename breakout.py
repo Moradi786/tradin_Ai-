@@ -84,6 +84,8 @@ def early_signal_message(symbol, signal):
 🧱 حمایت: <code>{signal['support']:.8g}</code>
 🧱 مقاومت: <code>{signal['resistance']:.8g}</code>
 📏 فاصله تا {level_fa}: <b>{signal['distance_pct']:.2f}%</b>
+📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
+📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 🛒 نسبت خرید: <b>{signal['buy_ratio'] * 100:.1f}%</b>
 {SEP}
@@ -102,6 +104,7 @@ def watch_message(symbol, signal, volume):
 🧱 حمایت: <code>{signal['support']:.8g}</code>
 🧱 مقاومت: <code>{signal['resistance']:.8g}</code>
 📏 فاصله تا {level_fa}: <b>{signal['distance_pct']:.2f}%</b>
+📊 حجم ۲۴ ساعته: <b>{signal.get('volume_24h_btc', 0):,.0f} BTC</b>
 📈 حجم نسبت به میانگین: <b>{signal['volume_ratio']:.2f}x</b>
 {SEP}
 هشدار نزدیک سطح؛ جهت قطعی نیست.
