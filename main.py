@@ -683,6 +683,21 @@ async def scan() -> None:
         binance_tickers(),
     )
 
+    # فیلتر حداقل حجم ۲۴ ساعته برحسب BTC؛ quoteVolume از صرافی‌ها به USDT/USD است.
+    min_volume_btc = max(0.0, num(os.getenv("MIN_24H_VOLUME_BTC", "500"), 500))
+    btc_ticker = tickers.get("BTCUSDT") or {}
+    btc_price = num(
+        btc_ticker.get("lastPrice")
+        or btc_ticker.get("last_price")
+        or btc_ticker.get("last")
+        or btc_ticker.get("price")
+    )
+    if btc_price <= 0:
+        log.error("Cannot apply BTC-volume filter: BTCUSDT price is unavailable; skipping scan safely.")
+        return
+    min_quote_volume = min_volume_btc * btc_price
+    log.info("24h volume filter: >= %.0f BTC (about %.0f USDT per symbol)", min_volume_btc, min_quote_volume)
+
     candidates = []
     for symbol in symbols:
         ticker = tickers.get(symbol)
@@ -690,7 +705,7 @@ async def scan() -> None:
             continue
 
         quote_volume = num(ticker.get("quoteVolume"))
-        if quote_volume <= 0:
+        if quote_volume < min_quote_volume:
             continue
 
         base = symbol.replace("USDT", "")
