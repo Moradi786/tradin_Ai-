@@ -785,11 +785,10 @@ async def scan() -> None:
     prune_cache(oi_cache, FLOW_INTERVAL * 4)
 
     # ------------------------------
-    # TRACKER: ارزیابی سیگنال‌های قبلی + گزارش روزانه
+    # TRACKER: فقط ارزیابی سیگنال‌های قبلی؛ گزارش خودکار ارسال نمی‌شود
     # ------------------------------
     try:
         await tracker.check_pending()
-        await tracker.maybe_daily_report(telegram)
     except Exception as e:
         log.warning("TRACKER error: %s", e)
 
