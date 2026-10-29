@@ -16,6 +16,7 @@ Crypto AI Signal Bot — main
 
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -28,6 +29,7 @@ import telemenu
 import tracker
 import weakening
 import breakout
+from liquidity import liquidity_report
 from core import *  # noqa: F401,F403  (پیکربندی، دیتا، منطق سیگنال)
 
 # مرجع به تسک‌های پس‌زمینه تا از garbage collection جلوگیری شود.
@@ -215,6 +217,23 @@ async def ai_analysis(data) -> str:
 
 
 async def telegram(message: str) -> None:
+    # Append live visible order-book depth to every signal that contains a #SYMBOL.
+    # The module falls back Binance -> Bybit -> OKX and explicitly marks missing data.
+    match = re.search(r"#(?:⁦)?([A-Z0-9]{3,24})(?:⁩)?", message)
+    if match:
+        symbol = match.group(1)
+        price_match = re.search(r"💵[^<]*<code>([0-9.eE+-]+)</code>", message)
+        try:
+            signal_price = float(price_match.group(1)) if price_match else None
+        except (TypeError, ValueError):
+            signal_price = None
+        try:
+            report = await liquidity_report(symbol, signal_price)
+            message = message.rstrip() + "\\n" + SEP + "\\n" + report + "\\n" + FOOTER
+        except Exception as exc:
+            log.warning("Liquidity report failed for %s: %s", symbol, type(exc).__name__)
+            message = message.rstrip() + "\\n" + SEP + "\\n🧭 <b>نقدینگی:</b> بررسی ناموفق؛ داده در دسترس نیست."
+
     if not TELEGRAM_BOT_TOKEN:
         log.warning("TELEGRAM SKIPPED: TELEGRAM_BOT_TOKEN is empty.")
         return
