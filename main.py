@@ -229,10 +229,10 @@ async def telegram(message: str) -> None:
             signal_price = None
         try:
             report = await liquidity_report(symbol, signal_price)
-            message = message.rstrip() + "\\n" + SEP + "\\n" + report + "\\n" + FOOTER
+            message = message.rstrip() + "\n" + SEP + "\n" + report + "\n" + FOOTER
         except Exception as exc:
             log.warning("Liquidity report failed for %s: %s", symbol, type(exc).__name__)
-            message = message.rstrip() + "\\n" + SEP + "\\n🧭 <b>نقدینگی:</b> بررسی ناموفق؛ داده در دسترس نیست."
+            message = message.rstrip() + "\n" + SEP + "\n🧭 <b>نقدینگی:</b> بررسی ناموفق؛ داده در دسترس نیست."
 
     if not TELEGRAM_BOT_TOKEN:
         log.warning("TELEGRAM SKIPPED: TELEGRAM_BOT_TOKEN is empty.")
