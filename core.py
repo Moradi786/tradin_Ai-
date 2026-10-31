@@ -1781,7 +1781,7 @@ async def market_global() -> Optional[dict]:
         coinpaprika_global_snapshot,
         coinlore_global_snapshot,
     ]
-    if COINMARKETCAP_API_KEY:
+    if COINMARKETCAP_API_KEY and not FREE_ONLY_MODE:
         sources.append(coinmarketcap_global_snapshot)
 
     for source in sources:
