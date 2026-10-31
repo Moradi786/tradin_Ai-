@@ -60,8 +60,7 @@ python main.py
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | توکن ربات تلگرام (از @BotFather) |
 | `TELEGRAM_CHAT_ID` | آیدی چت/کانال مقصد |
-| حداقل یکی از کلیدهای AI | `GEMINI_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_API_KEY` |
-| `LIVECOINWATCH_API_KEY` | دادهٔ بازار هر کوین |
+| کلید AI | اختیاری؛ فقط از سهمیهٔ رایگان Gemini / Groq / OpenRouter استفاده کن |
 
 فهرست کامل تنظیمات در [`.env.example`](.env.example) آمده است. قبل از اجرا `FREE_ONLY_MODE=true` را نگه دار و کلیدهای پولی را خالی بگذار.
 
