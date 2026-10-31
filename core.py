@@ -68,6 +68,9 @@ log = logging.getLogger("signal-bot")
 
 load_dotenv()
 
+# In free-only mode, paid/usage-billed providers are disabled even if keys exist.
+FREE_ONLY_MODE = os.getenv("FREE_ONLY_MODE", "true").strip().lower() in ("1", "true", "yes")
+
 
 def _int(name: str, default: str) -> int:
     try:
@@ -92,7 +95,7 @@ def _bool(name: str, default: str = "false") -> bool:
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY = "" if FREE_ONLY_MODE else os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 
 # Gemini (Google AI Studio) به‌عنوان provider جایگزین.
@@ -1031,7 +1034,7 @@ async def free_site_price(base: str) -> Optional[float]:
 
 async def coinglass_funding(symbol: str) -> Optional[dict]:
     """Funding rate از CoinGlass — فقط اگر COINGLASS_API_KEY ست شده."""
-    if not COINGLASS_API_KEY:
+    if FREE_ONLY_MODE or not COINGLASS_API_KEY:
         return None
     data = await http_get(
         "https://open-api-v4.coinglass.com/api/futures/funding-rate/ohlc-history",
@@ -1054,7 +1057,7 @@ async def coinglass_funding(symbol: str) -> Optional[dict]:
 
 async def coinalyze_oi(symbol: str) -> Optional[dict]:
     """Open Interest فعلی از Coinalyze — فقط اگر COINALYZE_API_KEY ست شده."""
-    if not COINALYZE_API_KEY:
+    if FREE_ONLY_MODE or not COINALYZE_API_KEY:
         return None
     base = symbol.replace("USDT", "")
     data = await http_get(
@@ -1382,7 +1385,7 @@ async def volume_analysis(symbol: str) -> Optional[dict]:
 
 
 async def livecoinwatch() -> dict:
-    if not LIVECOINWATCH_API_KEY:
+    if FREE_ONLY_MODE or not LIVECOINWATCH_API_KEY:
         return {}
 
     now = time.time()
@@ -1447,7 +1450,7 @@ async def livecoinwatch() -> dict:
 async def cryptometer_flow() -> dict:
     global cryptometer_disabled
 
-    if not CRYPTOMETER_API_KEY or cryptometer_disabled:
+    if FREE_ONLY_MODE or not CRYPTOMETER_API_KEY or cryptometer_disabled:
         return {}
 
     now = time.time()
@@ -1666,7 +1669,7 @@ _source_blocked_until: dict = {}
 
 async def coinmarketcap_global_snapshot() -> Optional[dict]:
     headers = {}
-    if COINMARKETCAP_API_KEY:
+    if COINMARKETCAP_API_KEY and not FREE_ONLY_MODE:
         url = (
             "https://pro-api.coinmarketcap.com/"
             "v1/global-metrics/quotes/latest"
@@ -1778,7 +1781,7 @@ async def market_global() -> Optional[dict]:
         coinpaprika_global_snapshot,
         coinlore_global_snapshot,
     ]
-    if COINMARKETCAP_API_KEY:
+    if COINMARKETCAP_API_KEY and not FREE_ONLY_MODE:
         sources.append(coinmarketcap_global_snapshot)
 
     for source in sources:
