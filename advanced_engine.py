@@ -47,7 +47,7 @@ def score_setup(
     score += 15 if checks["taker_direction"] else 0
 
     oi = None if oi_change_pct is None else _num(oi_change_pct)
-    checks["oi_confirmation"] = oi is not None and (oi >= 0.5 if long_side else oi <= -0.5)
+    checks["oi_confirmation"] = oi is not None and oi >= 0.5
     score += 15 if checks["oi_confirmation"] else 0
 
     flow = None if netflow is None else _num(netflow)
