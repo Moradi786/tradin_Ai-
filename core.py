@@ -357,7 +357,29 @@ def _mark_okx_blocked() -> None:
     )
 
 
+# Serialize and pace public market requests per host, including queued retries.
+from urllib.parse import urlsplit
+_market_locks = {}
+_market_next = {}
+_market_blocked = {}
+_market_hosts = ("binance", "bybit", "okx", "coingecko", "kucoin", "bitget", "cryptocompare")
+
 async def _request(method: str, url: str, retries: int = 2, **kwargs):
+    host = urlsplit(url).hostname or ""
+    if not any(name in host for name in _market_hosts):
+        return await _request_raw(method, url, retries, **kwargs)
+    lock = _market_locks.setdefault(host, asyncio.Lock())
+    async with lock:
+        if time.monotonic() < _market_blocked.get(host, 0):
+            return None
+        if ("binance" in host and binance_blocked()) or ("okx" in host and okx_blocked()):
+            return None
+        await asyncio.sleep(max(0, _market_next.get(host, 0) - time.monotonic()))
+        _market_next[host] = time.monotonic() + (2.0 if "coingecko" in host else 0.5)
+        return await _request_raw(method, url, retries, **kwargs)
+
+
+async def _request_raw(method: str, url: str, retries: int = 2, **kwargs):
     """درخواست HTTP با retry ساده. در خطا None برمی‌گرداند."""
     session = await get_session()
     for attempt in range(retries + 1):
@@ -377,6 +399,13 @@ async def _request(method: str, url: str, retries: int = 2, **kwargs):
                     # ریت‌لیمیت OKX: برای مدتی درخواستی به OKX نمی‌رود.
                     if response.status == 429 and "okx.com" in url:
                         _mark_okx_blocked()
+                    if response.status in (418, 429):
+                        host = urlsplit(url).hostname or ""
+                        try:
+                            delay = float(response.headers.get("Retry-After", "300"))
+                        except ValueError:
+                            delay = 300
+                        _market_blocked[host] = time.monotonic() + max(300, delay)
                     # خطای 4xx با retry درست نمی‌شود.
                     if 400 <= response.status < 500:
                         return None
@@ -1194,7 +1223,25 @@ async def binance_tickers() -> dict:
     return result
 
 
+_candle_cache = {}
+_candle_locks = {}
+
 async def klines(symbol: str, interval: str, limit: int = 100) -> list:
+    key = (symbol, interval, limit)
+    lock = _candle_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        cached = _candle_cache.get(key)
+        if cached and now - cached[0] < 30:
+            return [list(row) for row in cached[1]]
+        rows = await _uncached_klines(symbol, interval, limit)
+        if rows:
+            if len(_candle_cache) >= 4096:
+                _candle_cache.pop(next(iter(_candle_cache)))
+            _candle_cache[key] = (time.monotonic(), [list(row) for row in rows])
+        return rows
+
+async def _uncached_klines(symbol: str, interval: str, limit: int = 100) -> list:
     # وقتی بایننس بن است: Bybit → OKX → KuCoin → Bitget → CryptoCompare.
     if binance_blocked():
         for source in (bybit_klines, okx_klines, kucoin_klines,
