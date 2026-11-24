@@ -1242,7 +1242,7 @@ async def get_rsi(symbol: str, interval: str) -> Optional[float]:
     data = await klines(symbol, interval, 100)
     if not data:
         return None
-    return rsi([num(x[4]) for x in data])
+    return rsi([num(x[4]) for x in data[:-1]])
 
 
 async def all_rsi(symbol: str) -> dict:
@@ -1283,8 +1283,8 @@ async def trend_direction(symbol: str) -> str:
 
     data = await klines(symbol, "1h", TREND_EMA_PERIOD + 60)
     trend = "UNKNOWN"
-    if len(data) >= TREND_EMA_PERIOD:
-        closes = [num(x[4]) for x in data]
+    if len(data) > TREND_EMA_PERIOD:
+        closes = [num(x[4]) for x in data[:-1]]
         e = ema(closes, TREND_EMA_PERIOD)
         if e is not None:
             price = closes[-1]
