@@ -184,13 +184,19 @@ def _evaluate(kind: str, direction: str, move_pct: float) -> str:
                 return "LOSS"
             return "FLAT"
         return "FLAT"
-    if kind == "ROT":
+    if kind in {"ROT", "DUMP"}:
         # ترکیب طلایی؛ جهت همیشه BULLISH است.
         if move_pct >= TRACKER_WIN_MOVE:
             return "WIN"
         if move_pct <= -TRACKER_WIN_MOVE:
             return "LOSS"
         return "FLAT"
+    if kind in {"BREAKOUT", "LEVEL_EARLY"}:
+        if direction in {"LONG", "SHORT"}:
+            return _evaluate(direction, direction, move_pct)
+        return "FLAT"
+    if kind == "LEVEL_WATCH":
+        return "WIN" if abs(move_pct) >= TRACKER_EARLY_WIN_MOVE else "FLAT"
     if kind == "EARLY":
         # هشدار زودهنگام موفق است اگر حرکت بزرگ آمد (هر جهت).
         return "WIN" if abs(move_pct) >= TRACKER_EARLY_WIN_MOVE else "FLAT"
@@ -235,8 +241,8 @@ async def check_pending() -> None:
         return
 
     rows = await _execute(
-        "SELECT id, kind, symbol, direction, price, ts, result_1h"
-        " FROM signals WHERE result_4h IS NULL"
+        "SELECT id, kind, symbol, direction, price, ts, result_1h, result_4h"
+        " FROM signals WHERE result_4h IS NULL OR result_1h IS NULL"
     )
     if not rows:
         return
@@ -255,30 +261,29 @@ async def check_pending() -> None:
         if age < CHECK_1H:
             continue
 
-        current = await _current_price(symbol)
-        if not current or not price:
-            continue
-
-        move = (current - price) / price * 100
-        result = _evaluate(kind, direction, move)
-
-        if not done_1h:
+        for horizon, column, done in ((CHECK_1H, "1h", done_1h), (CHECK_4H, "4h", row[7] is not None)):
+            if done or age < horizon + 60:
+                continue
+            # Use the last completed minute at the requested horizon, not today's price.
+            end_ms = int((ts + horizon) // 60) * 60000 - 1
+            rows_at_time = await http_get(
+                f"{core.BINANCE}/fapi/v1/klines",
+                {"symbol": symbol, "interval": "1m", "endTime": end_ms, "limit": 1},
+            )
+            if not isinstance(rows_at_time, list) or not rows_at_time:
+                continue
+            row_at_time = rows_at_time[-1]
+            if len(row_at_time) < 7 or int(row_at_time[6]) != end_ms:
+                continue
+            current = num(row_at_time[4])
+            if current <= 0 or price <= 0:
+                continue
+            move = (current - price) / price * 100
+            result = _evaluate(kind, direction, move)
             await _execute(
-                "UPDATE signals SET result_1h = ?, move_1h = ?"
-                " WHERE id = ?",
+                f"UPDATE signals SET result_{column} = ?, move_{column} = ? WHERE id = ?",
                 [result, move, sig_id],
             )
-            log.info("TRACKER 1h: %s %s -> %s (%+.2f%%)",
-                     kind, symbol, result, move)
-
-        if age >= CHECK_4H:
-            await _execute(
-                "UPDATE signals SET result_4h = ?, move_4h = ?"
-                " WHERE id = ?",
-                [result, move, sig_id],
-            )
-            log.info("TRACKER 4h: %s %s -> %s (%+.2f%%)",
-                     kind, symbol, result, move)
 
 
 # ============================================================
