@@ -710,6 +710,13 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                 "market": market,
             }
 
+            from pro_engine import assess
+            from core import flow_direction
+            quality = assess(direction, volume, oi, flow_direction(flow_coin), market, btc, strict_analysis)
+            signal_data["quality"] = quality
+            if not quality["eligible"]:
+                log.info("PRO quality withheld %s %s: %s", direction, symbol, quality)
+                return
             # AI may veto a rule-qualified signal, never invent a new direction.
             providers = ai_providers()
             if providers:
