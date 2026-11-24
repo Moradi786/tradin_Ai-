@@ -361,6 +361,8 @@ async def _request(method: str, url: str, retries: int = 2, **kwargs):
     """درخواست HTTP با retry ساده. در خطا None برمی‌گرداند."""
     session = await get_session()
     for attempt in range(retries + 1):
+        if ("binance" in url and binance_blocked()) or ("okx.com" in url and okx_blocked()):
+            return None
         try:
             async with session.request(method, url, **kwargs) as response:
                 if response.status != 200:
@@ -1206,7 +1208,13 @@ async def klines(symbol: str, interval: str, limit: int = 100) -> list:
         f"{BINANCE}/fapi/v1/klines",
         {"symbol": symbol, "interval": interval, "limit": limit},
     )
-    return data or []
+    if data:
+        return data
+    for source in (bybit_klines, okx_klines, kucoin_klines, bitget_klines, cryptocompare_klines):
+        data = await source(symbol, interval, limit)
+        if data:
+            return data
+    return []
 
 
 # ============================================================
