@@ -592,7 +592,6 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # ==========================
             # از داده‌های همین اسکن استفاده می‌کند؛
             # هیچ درخواست اضافه‌ای به بایننس نمی‌زند.
-            pre = premove.detect_premove(symbol, volume, flow_coin, oi)
             if pre:
                 key = f"PRE:{symbol}"
                 if can_send(key):
@@ -611,8 +610,6 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # ==========================
             # GOLDEN ROTATION (ترکیب طلایی: BTC → ALT)
             # ==========================
-            rot = premove.detect_rotation(symbol, volume, flow_coin, oi,
-                                          market)
             if rot:
                 key = f"ROT:{symbol}"
                 if can_send(key):
@@ -632,8 +629,6 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # ==========================
             # BTC DUMP ROTATION (سیگنال ششم)
             # ==========================
-            dump = premove.detect_btc_dump(symbol, volume, flow_coin, oi,
-                                           market)
             if dump:
                 key = f"DUMP:{symbol}"
                 if can_send(key):
@@ -657,9 +652,6 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
             # معمولاً با خشک شدن حجم همراه است.
             # closes از volume_analysis پاس داده می‌شود تا
             # درخواست klines تکراری زده نشود (rate-limit).
-            weak = await weakening.detect_weakening(
-                symbol, flow_coin, oi, volume.get("closes")
-            )
             if weak:
                 key = f"WEAK:{weak['direction']}:{symbol}"
                 if can_send_cooldown(key, WEAK_COOLDOWN):
@@ -694,7 +686,7 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                 return
 
             key = f"{direction}:{symbol}"
-            if not can_send(key):
+            if time.time() - last_signals.get(key, 0) < SIGNAL_COOLDOWN:
                 return
 
             signal_data = {
@@ -730,6 +722,8 @@ async def scan_symbol(symbol: str, lwc_coin: Optional[dict],
                     log.info("AI gate withheld %s %s", direction, symbol)
                     return
             ai = await ai_analysis(signal_data)
+            if not can_send(key):
+                return
 
             await telegram(
                 signal_message(
