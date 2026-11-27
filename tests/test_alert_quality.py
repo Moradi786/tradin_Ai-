@@ -1,12 +1,18 @@
 import unittest
+from unittest.mock import patch
 
 import core
 
 
 class AlertQualityTests(unittest.TestCase):
     def setUp(self):
+        settings = patch.multiple(core, EARLY_VOLUME_RATIO=2.5, EARLY_FLOW_RATIO=0.18,
+                                  BINANCE_FLOW_MIN_RATIO=0.08, MAX_PRICE_MOVE=1.5,
+                                  REQUIRE_TREND=True)
+        settings.start()
+        self.addCleanup(settings.stop)
         self.volume = {
-            "volume_ratio": 2.2,
+            "volume_ratio": 2.6,
             "price_move": 0.2,
             "buy_ratio": 0.62,
             "trend": "UP",
@@ -22,6 +28,11 @@ class AlertQualityTests(unittest.TestCase):
     def test_early_alert_requires_volume_flow_oi_and_trend(self):
         self.assertTrue(core.early_watch(
             self.volume, {"volume": 1000}, self.flow, self.oi
+        ))
+
+    def test_early_alert_rejects_insufficient_volume(self):
+        self.assertFalse(core.early_watch(
+            dict(self.volume, volume_ratio=2.2), {"volume": 1000}, self.flow, self.oi
         ))
 
     def test_early_alert_rejects_missing_oi_or_flow(self):
