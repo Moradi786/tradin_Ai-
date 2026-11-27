@@ -1,0 +1,23 @@
+name: Fake Breakout Backtest
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/signal-reliability]
+    paths: ['.github/workflows/fake-breakout.yml', 'fake_breakout_research.py', 'run_fake_breakout.py']
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python run_fake_breakout.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fake-breakout-results
+          path: fake_breakout_results.json
+          if-no-files-found: error
